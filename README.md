@@ -17,20 +17,15 @@ used across multiple web projects (e.g. REST, GraphQL, and file-based services).
 ---
 
 ## Directory Structure
-src
-├── config
-│ ├── app.rs # Loads .env and builds top-level AppConfig
-│ ├── db.rs # Defines DbConfig and connection pool factory
-│ └── env.rs # Environment variable utilities (read_flag, read_u32, etc.)
-│
-├── db
-│ ├── connection.rs # Global shared MySQL pool (OnceLock)
-│ ├── mysql_adapter.rs# MySQL implementation of the generic Db trait
-│ └── port.rs # Defines Db trait, Param/Value/Row abstraction
-│
-├── config.rs # Module re-exports for config/*
-├── db.rs # Module re-exports for db/*
-└── lib.rs # Crate root and public API surface
+- config
+- app.rs # Loads .env and builds top-level AppConfig
+- db.rs # Defines DbConfig and connection pool factory
+- env.rs # Environment variable utilities (read_flag, read_u32, etc.)
+
+- db
+- connection.rs # Global shared MySQL pool (OnceLock)
+- mysql_adapter.rs# MySQL implementation of the generic Db trait
+- port.rs # Defines Db trait, Param/Value/Row abstraction
 
 
 ---
@@ -41,18 +36,20 @@ Add this crate to your project (e.g. as a workspace dependency):
 
 ```toml
 [dependencies]
-    wzs-web = { git = "https://github.com/kay1759/wzs-web.git" }
+wzs-web = { git = "https://github.com/kay1759/wzs-web.git" }
+```
+```
+use wzs_web::config::app::AppConfig;
+use wzs_web::db::connection::get_pool;
 
-    use wzs_web::config::app::AppConfig;
-    use wzs_web::db::connection::get_pool;
+fn main() {
+    let cfg = AppConfig::from_env();
+    let pool = get_pool();
 
-    fn main() {
-        let cfg = AppConfig::from_env();
-        let pool = get_pool();
-
-        println!("Database URL: {:?}", cfg.db.url);
-        // Application logic here...
-    }
+    println!("Database URL: {:?}", cfg.db.url);
+    // Application logic here...
+}
+```
 
 ## Environment Variables
 
