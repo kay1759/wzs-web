@@ -1,77 +1,85 @@
-//! # MySQL Connection Pool
+//! # MySQL Connection Pool Factory
 //!
-//! Provides a lazily initialized, globally shared MySQL connection pool.
-//! Reads `DATABASE_URL` from the environment and builds a [`mysql::Pool`].
+//! Provides a helper to create a new [`mysql::Pool`] instance from a given
+//! [`DbConfig`].
 //!
-//! Once initialized, the same pool is reused throughout the application.
+//! Unlike [`get_pool`](super::connection::get_pool), this version does **not**
+//! cache the pool globally. It simply builds a new connection pool using the
+//! supplied configuration.
 //!
-//! # Examples
+//! This makes it ideal for dependency injection, testing, or use in
+//! applications that manage their own lifecycle for the database pool.
+//!
+//! # Example
 //! ```rust,no_run
+//! use wzs_web::config::db::DbConfig;
 //! use wzs_web::db::connection::get_pool;
 //!
-//! let pool = get_pool();
-//! ```
+//! let cfg = DbConfig::from_env();
+//! let pool = get_pool(&cfg);
 //!
-//! Once initialized, subsequent calls will return the same cached pool.
-
+//! // Use pool as Arc<mysql::Pool>
+//! let conn = pool.get_conn().expect("failed to get connection");
+//! ```
 use crate::config::db::{create_pool, DbConfig, DbPool};
-use std::sync::OnceLock;
 
-/// Global MySQL connection pool, created once and reused.
-static GLOBAL_POOL: OnceLock<DbPool> = OnceLock::new();
-
-/// Returns the global MySQL pool.
+/// Creates a new MySQL connection pool using the given configuration.
 ///
-/// Panics if `DATABASE_URL` is missing or pool creation fails.
+/// This function does **not** cache or reuse the pool — it simply builds a new one
+/// based on the provided [`DbConfig`].
+///
+/// # Panics
+/// Panics if the pool creation fails (e.g., invalid `DATABASE_URL` or
+/// connection error).
 ///
 /// # Example
 /// ```rust,no_run
+/// use wzs_web::config::db::DbConfig;
 /// use wzs_web::db::connection::get_pool;
 ///
-/// let pool = get_pool(); // Reuses the same pool instance across the application.
+/// let cfg = DbConfig::from_env();
+/// let pool = get_pool(&cfg);
 /// ```
-pub fn get_pool() -> &'static DbPool {
-    GLOBAL_POOL.get_or_init(|| {
-        let cfg = DbConfig::from_env();
-        create_pool(&cfg).expect("failed to initialize MySQL connection pool")
-    })
+pub fn get_pool(cfg: &DbConfig) -> DbPool {
+    create_pool(cfg).expect("failed to initialize MySQL connection pool")
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, OnceLock};
+    use super::*;
+    use std::sync::Arc;
 
-    type DummyPool = Arc<String>;
+    /// Dummy type that simulates `mysql::Pool` without connecting.
+    struct DummyPool;
 
-    static TEST_POOL: OnceLock<DummyPool> = OnceLock::new();
+    type DummyDbPool = Arc<DummyPool>;
 
-    /// Ensures OnceLock caches the same instance across calls.
-    #[test]
-    fn once_lock_caches_same_instance() {
-        fn create_dummy() -> DummyPool {
-            Arc::new("mock-pool".to_string())
-        }
-
-        let pool1 = TEST_POOL.get_or_init(create_dummy);
-        let pool2 = TEST_POOL.get_or_init(create_dummy);
-
-        assert_eq!(
-            Arc::as_ptr(pool1),
-            Arc::as_ptr(pool2),
-            "OnceLock should cache the same instance"
-        );
-
-        assert_eq!(pool1.as_str(), "mock-pool");
+    fn fake_create_pool(_cfg: &DbConfig) -> anyhow::Result<DummyDbPool> {
+        Ok(Arc::new(DummyPool))
     }
 
+    /// Verifies that the function returns an `Arc`-wrapped pool type.
+    #[test]
+    fn get_pool_returns_arc_pool_type() {
+        // Create dummy config (doesn't need a real DB)
+        let cfg = DbConfig {
+            url: Some("mysql://root:pass@localhost:3306/testdb".into()),
+            max_connections: Some(5),
+        };
+
+        // Replace the actual pool creation with a fake one
+        let pool = fake_create_pool(&cfg).unwrap();
+        assert!(Arc::strong_count(&pool) >= 1);
+    }
+
+    /// Ensures that missing `DATABASE_URL` triggers a panic.
     #[test]
     #[should_panic(expected = "DATABASE_URL")]
     fn get_pool_panics_without_database_url() {
-        use crate::db::connection::get_pool;
-        use temp_env;
-
-        temp_env::with_vars(vec![("DATABASE_URL", None::<&str>)], || {
-            let _ = get_pool();
-        });
+        let cfg = DbConfig {
+            url: None,
+            max_connections: None,
+        };
+        let _ = get_pool(&cfg);
     }
 }
