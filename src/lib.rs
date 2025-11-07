@@ -40,4 +40,5 @@ pub use uuid;
 
 pub mod config;
 pub mod db;
+pub mod image;
 pub mod web;

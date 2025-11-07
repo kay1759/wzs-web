@@ -1,14 +1,14 @@
 //! # Application Configuration Loader
 //!
 //! Provides a unified configuration loader for application settings,
-//! including database, HTTP, CORS, CSRF, and feature toggles.
+//! including **database**, **HTTP**, **CORS**, **CSRF**, and **feature toggles**.
 //!
 //! Automatically loads `.env` files for non-production environments.
 //! It checks for a custom `DOTENV_FILE` path first, then falls back to
 //! `.env.{APP_ENV}` or `.env`.
 //!
 //! This configuration is typically initialized once at application startup
-//! and shared throughout the system.
+//! and shared throughout the entire system via dependency injection.
 //!
 //! # Environment Variables
 //! | Variable | Description | Default |
@@ -19,9 +19,14 @@
 //! | `HTTP_MAX_BODY_BYTES` | Maximum request body size (bytes) | derived from `HTTP_MAX_BODY_MB` |
 //! | `HTTP_MAX_BODY_MB` | Max body size in megabytes (if bytes not set) | `5` |
 //! | `CSRF_SECRET` | CSRF signing secret (auto-generated if missing) | random |
-//! | `GRAPHIQL` | Enable GraphiQL IDE | `false` |
+//! | `GRAPHIQL` | Enable GraphiQL IDE (development only) | `false` |
 //! | `CORS_ORIGINS` | Allowed origins for CORS | `""` |
-//! | `CORS_CREDENTIALS` | Allow cookies/headers in CORS requests | `false` |
+//! | `CORS_CREDENTIALS` | Allow credentials in CORS requests | `false` |
+//! | `UPLOAD_ROOT` | Root directory for uploads | `"./var/uploads"` |
+//! | `UPLOAD_IMAGE_DIR` | Subdirectory for image uploads | `"images"` |
+//! | `UPLOAD_FILE_DIR` | Subdirectory for other file uploads | `"files"` |
+//! | `IMAGE_MAX_WIDTH` | Max allowed image width (px) | `1280` |
+//! | `IMAGE_MAX_HEIGHT` | Max allowed image height (px) | `1280` |
 //!
 //! # Example
 //! ```rust,no_run
@@ -34,15 +39,25 @@
 //! ```
 
 use std::env;
+use std::path::PathBuf;
 
 use crate::config::{
     csrf::CsrfConfig,
     db::DbConfig,
     env::*,
+    image::ImageConfig,
+    upload::UploadConfig,
     web::{CorsConfig, HttpConfig},
 };
 
 /// Top-level application configuration.
+///
+/// This struct aggregates all configuration domains:
+/// - **Database connection**
+/// - **HTTP server and request limits**
+/// - **CSRF & CORS security**
+/// - **Image processing & upload directories**
+/// - **Feature flags (e.g. GraphiQL enablement)**
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     /// Database configuration.
@@ -53,17 +68,25 @@ pub struct AppConfig {
     pub csrf: CsrfConfig,
     /// Cross-Origin Resource Sharing configuration.
     pub cors: CorsConfig,
-    /// Whether the GraphiQL IDE is enabled (for development use).
+    /// Image dimension constraints.
+    pub image: ImageConfig,
+    /// File and image upload directory configuration.
+    pub upload: UploadConfig,
+    /// Whether the GraphiQL IDE is enabled (typically only in development).
     pub enable_graphiql: bool,
 }
 
 impl AppConfig {
-    /// Loads application configuration from environment variables.
+    /// Loads application configuration from environment variables and optional `.env` files.
     ///
     /// ## Behavior
     /// - Reads `APP_ENV` (defaults to `"development"`).
-    /// - Loads `.env` or `.env.{APP_ENV}` for non-production environments.
-    /// - Parses all supported environment variables and falls back to defaults.
+    /// - If not in production, attempts to load:
+    ///   1. `DOTENV_FILE` (if defined), or
+    ///   2. `.env.{APP_ENV}`, or
+    ///   3. fallback to `.env`.
+    /// - Parses known environment variables into structured configuration.
+    /// - Falls back to safe defaults for optional parameters.
     ///
     /// # Example
     /// ```rust,no_run
@@ -74,8 +97,10 @@ impl AppConfig {
     /// assert!(cfg.http.max_body_bytes > 0);
     /// ```
     pub fn from_env() -> Self {
+        // Determine environment (e.g., development, production)
         let app_env = env::var("APP_ENV").unwrap_or_else(|_| "development".into());
 
+        // Automatically load .env file for non-production environments
         if app_env != "production" {
             if let Ok(path) = env::var("DOTENV_FILE") {
                 let _ = dotenvy::from_filename(path);
@@ -97,6 +122,17 @@ impl AppConfig {
         let cors_env = env::var("CORS_ORIGINS").unwrap_or_default();
         let cors_credentials = read_flag("CORS_CREDENTIALS", false);
 
+        // --- Image configuration ---
+        let max_w = read_u32("IMAGE_MAX_WIDTH", 1280);
+        let max_h = read_u32("IMAGE_MAX_HEIGHT", 1280);
+
+        // --- Upload configuration ---
+        let upload_root: PathBuf = env::var("UPLOAD_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| "./var/uploads".into());
+        let image_dir = env::var("UPLOAD_IMAGE_DIR").unwrap_or_else(|_| "images".into());
+        let file_dir = env::var("UPLOAD_FILE_DIR").unwrap_or_else(|_| "files".into());
+
         let enable_graphiql = read_flag("GRAPHIQL", false);
 
         AppConfig {
@@ -108,6 +144,15 @@ impl AppConfig {
             cors: CorsConfig {
                 env: cors_env,
                 credentials: cors_credentials,
+            },
+            image: ImageConfig {
+                max_width: max_w,
+                max_height: max_h,
+            },
+            upload: UploadConfig {
+                root: upload_root,
+                image_dir,
+                file_dir,
             },
             enable_graphiql,
         }
@@ -159,6 +204,111 @@ mod tests {
                 !cfg.is_csrf_enabled(),
                 "Expected CSRF to be disabled when CSRF_SECRET is missing"
             );
+        });
+    }
+
+    #[test]
+    fn from_env_uses_defaults_when_missing_optional() {
+        let vars = vec![
+            ("APP_ENV", Some("production")),
+            ("GRAPHIQL", None),
+            ("CORS_ORIGINS", None),
+            ("CORS_CREDENTIALS", None),
+            ("IMAGE_MAX_WIDTH", None),
+            ("IMAGE_MAX_HEIGHT", None),
+            ("HTTP_MAX_BODY_BYTES", None),
+            ("HTTP_MAX_BODY_MB", None),
+            ("UPLOAD_ROOT", None),
+            ("UPLOAD_IMAGE_DIR", None),
+            ("UPLOAD_FILE_DIR", None),
+        ];
+
+        temp_env::with_vars(vars, || {
+            let cfg = AppConfig::from_env();
+
+            assert!(!cfg.enable_graphiql);
+
+            assert_eq!(cfg.image.max_width, 1280);
+            assert_eq!(cfg.image.max_height, 1280);
+
+            assert_eq!(cfg.upload.root, PathBuf::from("./var/uploads"));
+            assert_eq!(cfg.upload.image_dir, "images");
+            assert_eq!(cfg.upload.file_dir, "files");
+
+            assert_eq!(cfg.cors.env, "");
+            assert_eq!(cfg.cors.credentials, false);
+
+            assert_eq!(cfg.http.max_body_bytes, 5 * 1024 * 1024);
+        });
+    }
+
+    #[test]
+    fn from_env_overrides_all_fields() {
+        let vars = vec![
+            ("APP_ENV", Some("production")),
+            ("GRAPHIQL", Some("true")),
+            ("UPLOAD_ROOT", Some("/data/uploads")),
+            ("UPLOAD_IMAGE_DIR", Some("pics")),
+            ("UPLOAD_FILE_DIR", Some("docs")),
+            (
+                "CORS_ORIGINS",
+                Some("https://a.example.com,https://b.example.com"),
+            ),
+            ("CORS_CREDENTIALS", Some("true")),
+            ("IMAGE_MAX_WIDTH", Some("2048")),
+            ("IMAGE_MAX_HEIGHT", Some("1536")),
+            ("HTTP_MAX_BODY_BYTES", Some("3145728")),
+            ("HTTP_MAX_BODY_MB", Some("99")),
+        ];
+
+        temp_env::with_vars(vars, || {
+            let cfg = AppConfig::from_env();
+
+            assert!(cfg.enable_graphiql);
+
+            assert_eq!(cfg.upload.root, PathBuf::from("/data/uploads"));
+            assert_eq!(cfg.upload.image_dir, "pics");
+            assert_eq!(cfg.upload.file_dir, "docs");
+
+            assert_eq!(cfg.cors.env, "https://a.example.com,https://b.example.com");
+            assert!(cfg.cors.credentials);
+
+            assert_eq!(cfg.image.max_width, 2048);
+            assert_eq!(cfg.image.max_height, 1536);
+
+            assert_eq!(cfg.http.max_body_bytes, 3 * 1024 * 1024);
+        });
+    }
+
+    #[test]
+    fn http_body_size_falls_back_to_mb_when_bytes_absent() {
+        let vars = vec![
+            ("APP_ENV", Some("production")),
+            ("HTTP_MAX_BODY_BYTES", None),
+            ("HTTP_MAX_BODY_MB", Some("7")),
+        ];
+
+        temp_env::with_vars(vars, || {
+            let cfg = AppConfig::from_env();
+            assert_eq!(cfg.http.max_body_bytes, 7 * 1024 * 1024);
+        });
+    }
+
+    #[test]
+    fn malformed_numbers_use_defaults_where_applicable() {
+        let vars = vec![
+            ("APP_ENV", Some("production")),
+            ("IMAGE_MAX_WIDTH", Some("NaN")),
+            ("IMAGE_MAX_HEIGHT", Some("oops")),
+            ("HTTP_MAX_BODY_BYTES", None),
+            ("HTTP_MAX_BODY_MB", Some("not-a-number")),
+        ];
+
+        temp_env::with_vars(vars, || {
+            let cfg = AppConfig::from_env();
+            assert_eq!(cfg.image.max_width, 1280);
+            assert_eq!(cfg.image.max_height, 1280);
+            assert_eq!(cfg.http.max_body_bytes, 5 * 1024 * 1024);
         });
     }
 }
