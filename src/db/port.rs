@@ -30,6 +30,8 @@ use uuid::Uuid;
 pub enum Param<'a> {
     I64(i64),
     U64(u64),
+    F32(f32),
+    F64(f64),
     Bool(bool),
     Str(&'a str),
     DateTime(NaiveDateTime),
@@ -42,6 +44,8 @@ pub enum Param<'a> {
 pub enum Value {
     I64(i64),
     U64(u64),
+    F32(f32),
+    F64(f64),
     Bool(bool),
     Str(String),
     DateTime(NaiveDateTime),
@@ -68,6 +72,18 @@ impl<'a> From<i64> for Param<'a> {
 impl<'a> From<u64> for Param<'a> {
     fn from(x: u64) -> Self {
         Param::U64(x)
+    }
+}
+
+impl<'a> From<f32> for Param<'a> {
+    fn from(x: f32) -> Self {
+        Param::F32(x)
+    }
+}
+
+impl<'a> From<f64> for Param<'a> {
+    fn from(x: f64) -> Self {
+        Param::F64(x)
     }
 }
 
@@ -166,6 +182,22 @@ impl Row {
         match self.cols.get(key) {
             Some(Value::I64(v)) => Ok(*v),
             _ => bail!("column `{key}` is not I64"),
+        }
+    }
+
+    /// Returns a `u64` (accepts non-negative `i64`).
+    pub fn get_f32(&self, key: &str) -> Result<f32> {
+        match self.cols.get(key) {
+            Some(Value::F32(v)) => Ok(*v),
+            _ => bail!("column `{key}` is not F32"),
+        }
+    }
+
+    /// Returns an `i64`.
+    pub fn get_f64(&self, key: &str) -> Result<f64> {
+        match self.cols.get(key) {
+            Some(Value::F64(v)) => Ok(*v),
+            _ => bail!("column `{key}` is not F64"),
         }
     }
 
@@ -317,7 +349,7 @@ mod tests {
         assert!(e.contains("is not U64"));
 
         let e = r.get_string("missing").unwrap_err().to_string();
-        assert!(e.contains("not String") || e.contains("not found")); // 実装変更に寛容に
+        assert!(e.contains("not String") || e.contains("not found"));
     }
 
     #[test]
@@ -328,5 +360,46 @@ mod tests {
 
         assert_eq!(r.get_u64("pos_i64").unwrap(), 10);
         assert!(r.get_u64("neg_i64").is_err());
+    }
+
+    #[test]
+    fn params_macro_accepts_f32_f64() {
+        let x_f32: f32 = 1.5;
+        let x_f64: f64 = 3.14159;
+
+        let v = params![x_f32, x_f64];
+
+        assert!(matches!(v[0], Param::F32(f) if (f - 1.5).abs() < 1e-6));
+        assert!(matches!(v[1], Param::F64(f) if (f - 3.14159).abs() < 1e-12));
+    }
+
+    #[test]
+    fn row_get_f32_and_f64() {
+        let mut r = Row::default();
+
+        r.insert("f32col", Value::F32(1.5));
+        r.insert("f64col", Value::F64(3.14159));
+
+        // get_f32
+        let v32 = r.get_f32("f32col").unwrap();
+        assert!((v32 - 1.5).abs() < 1e-6);
+
+        // get_f64
+        let v64 = r.get_f64("f64col").unwrap();
+        assert!((v64 - 3.14159).abs() < 1e-12);
+    }
+
+    #[test]
+    fn row_get_f32_and_f64_errors_on_wrong_type() {
+        let mut r = Row::default();
+
+        r.insert("not_f32", Value::Str("abc".into()));
+        r.insert("not_f64", Value::Bool(true));
+
+        let e1 = r.get_f32("not_f32").unwrap_err().to_string();
+        assert!(e1.contains("is not F32"));
+
+        let e2 = r.get_f64("not_f64").unwrap_err().to_string();
+        assert!(e2.contains("is not F64"));
     }
 }

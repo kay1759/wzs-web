@@ -102,6 +102,8 @@ impl MySqlDb {
         match p {
             Param::I64(x) => My::Int(*x),
             Param::U64(x) => My::UInt(*x),
+            Param::F32(x) => My::Float(*x),
+            Param::F64(x) => My::Double(*x),
             Param::Bool(b) => My::Int(if *b { 1 } else { 0 }),
             Param::Str(s) => My::Bytes(s.as_bytes().to_vec()),
             Param::DateTime(dt) => {
@@ -117,7 +119,7 @@ impl MySqlDb {
                     t.nanosecond() / 1_000, // μs
                 )
             }
-            Param::Bin(b) => My::Bytes(b.to_vec()), // ← これを追加（UUIDなどBINARY(16)に対応）
+            Param::Bin(b) => My::Bytes(b.to_vec()),
             Param::Null => My::NULL,
         }
     }
@@ -153,17 +155,16 @@ impl MySqlDb {
                 My::Int(i) => Value::I64(i),
                 My::UInt(u) => Value::U64(u),
 
-                // 先行して文字列化：必要なら Value に F64/Decimal を追加して厳密化
-                My::Float(f) => Value::Str(f.to_string()),
-                My::Double(f) => Value::Str(f.to_string()),
+                My::Float(f) => Value::F32(f),
+                My::Double(f) => Value::F64(f),
 
-                // BLOB/TEXT 等
+                // BLOB/TEXT
                 My::Bytes(b) => match String::from_utf8(b) {
                     Ok(s) => Value::Str(s),
                     Err(e) => Value::Str(String::from_utf8_lossy(e.as_bytes()).into_owned()),
                 },
 
-                // DATE/DATETIME → NaiveDateTime へ
+                // DATE/DATETIME → NaiveDateTime
                 My::Date(y, m, d, hh, mm, ss, _micro) => {
                     let date = NaiveDate::from_ymd_opt(y as i32, m as u32, d as u32)
                         .unwrap_or_else(|| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
@@ -172,7 +173,7 @@ impl MySqlDb {
                     Value::DateTime(NaiveDateTime::new(date, time))
                 }
 
-                // TIME は（符号付き 日/時/分/秒.μ）→ とりあえず String 化
+                // TIME は（符号付き 日/時/分/秒.μ）→ String
                 My::Time(neg, days, hh, mm, ss, micro) => {
                     // 例: "-001 12:34:56.789012"
                     let sign = if neg { "-" } else { "" };
@@ -390,6 +391,22 @@ mod tests {
                 matches!(v[5], My::NULL);
             }
             _ => panic!("expected Params::Positional"),
+        }
+    }
+
+    /// Verifies F32 / F64 → mysql::Value conversion.
+    #[test]
+    fn to_mysql_value_maps_f32_f64() {
+        // F32
+        match MySqlDb::to_mysql_value(&Param::F32(1.5)) {
+            My::Float(v) => assert!((v - 1.5).abs() < 1e-6),
+            other => panic!("expected Float(1.5), got {other:?}"),
+        }
+
+        // F64
+        match MySqlDb::to_mysql_value(&Param::F64(3.14159)) {
+            My::Double(v) => assert!((v - 3.14159).abs() < 1e-12),
+            other => panic!("expected Double(3.14159), got {other:?}"),
         }
     }
 }
