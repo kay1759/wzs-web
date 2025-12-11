@@ -276,6 +276,7 @@ pub fn params<'a>(xs: impl Into<Vec<Param<'a>>>) -> Vec<Param<'a>> {
 /// Database abstraction (synchronous).
 ///
 /// For async support, define an equivalent trait with `async_trait`.
+#[cfg_attr(test, mockall::automock)]
 pub trait Db: Send + Sync + 'static {
     fn fetch_one(&self, sql: &str, params: &[Param]) -> Result<Option<Row>>;
 
