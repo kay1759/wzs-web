@@ -16,6 +16,8 @@
 //! | `APP_ENV` | Current environment (`development`, `production`, etc.) | `"development"` |
 //! | `DOTENV_FILE` | Optional path to a custom dotenv file | *none* |
 //! | `DATABASE_URL` | MySQL connection URL | *required* |
+//! | `JWT_SECRET` | Secret used to sign JWTs | `""` |
+//! | `HTML_PATH` | Path to HTML template file | `""` |
 //! | `HTTP_MAX_BODY_BYTES` | Maximum request body size (bytes) | derived from `HTTP_MAX_BODY_MB` |
 //! | `HTTP_MAX_BODY_MB` | Max body size in megabytes (if bytes not set) | `5` |
 //! | `CSRF_SECRET` | CSRF signing secret (auto-generated if missing) | random |
@@ -74,6 +76,16 @@ pub struct AppConfig {
     pub upload: UploadConfig,
     /// Whether the GraphiQL IDE is enabled (typically only in development).
     pub enable_graphiql: bool,
+    /// JWT signing secret.
+    ///
+    /// - Empty string if `JWT_SECRET` is not set.
+    /// - Validation is responsibility of the caller.
+    pub jwt_secret: String,
+    /// Path to the HTML template file.
+    ///
+    /// - Empty string if `HTML_PATH` is not set.
+    /// - File loading is responsibility of the caller.
+    pub html_path: String,
 }
 
 impl AppConfig {
@@ -135,6 +147,10 @@ impl AppConfig {
 
         let enable_graphiql = read_flag("GRAPHIQL", false);
 
+        // JWT & HTML
+        let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| "".to_string());
+        let html_path = env::var("HTML_PATH").unwrap_or_else(|_| "".to_string());
+
         AppConfig {
             db: DbConfig::from_env(),
             http: HttpConfig {
@@ -155,6 +171,8 @@ impl AppConfig {
                 file_dir,
             },
             enable_graphiql,
+            jwt_secret,
+            html_path,
         }
     }
 
@@ -309,6 +327,38 @@ mod tests {
             assert_eq!(cfg.image.max_width, 1280);
             assert_eq!(cfg.image.max_height, 1280);
             assert_eq!(cfg.http.max_body_bytes, 5 * 1024 * 1024);
+        });
+    }
+
+    #[test]
+    fn jwt_secret_defaults_to_empty() {
+        temp_env::with_vars(vec![("JWT_SECRET", None::<&str>)], || {
+            let cfg = AppConfig::from_env();
+            assert_eq!(cfg.jwt_secret, "");
+        });
+    }
+
+    #[test]
+    fn jwt_secret_is_loaded_from_env() {
+        temp_env::with_vars(vec![("JWT_SECRET", Some("test-secret"))], || {
+            let cfg = AppConfig::from_env();
+            assert_eq!(cfg.jwt_secret, "test-secret");
+        });
+    }
+
+    #[test]
+    fn html_path_defaults_to_empty() {
+        temp_env::with_vars(vec![("HTML_PATH", None::<&str>)], || {
+            let cfg = AppConfig::from_env();
+            assert_eq!(cfg.html_path, "");
+        });
+    }
+
+    #[test]
+    fn html_path_is_loaded_from_env() {
+        temp_env::with_vars(vec![("HTML_PATH", Some("/tmp/index.html"))], || {
+            let cfg = AppConfig::from_env();
+            assert_eq!(cfg.html_path, "/tmp/index.html");
         });
     }
 }
