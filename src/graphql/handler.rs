@@ -10,37 +10,43 @@ use crate::graphql::config::GraphqlAuthConfig;
 use crate::graphql::context::extract_current_user;
 use crate::graphql::guard::validate_csrf_guard;
 
-/// Generic GraphQL endpoint handler.
+/// GraphQL POST endpoint handler.
 ///
 /// # Overview
 ///
-/// This handler provides a reusable, application-agnostic GraphQL endpoint
-/// implementation intended for use in multiple projects.
+/// This handler provides a **reusable, application-agnostic**
+/// implementation of a GraphQL POST endpoint for Axum.
 ///
-/// It is designed to handle **cross-cutting infrastructure concerns only**,
-/// such as CSRF protection and authentication, and delegates all
-/// authorization and domain logic to GraphQL resolvers.
+/// It is responsible **only for infrastructure-level concerns**
+/// that are common across applications:
+///
+/// - CSRF validation
+/// - Authentication (JWT extraction)
+/// - Injecting authentication context
+///
+/// All domain logic, authorization rules, and error semantics
+/// must be handled by GraphQL resolvers.
 ///
 /// # Responsibilities
 ///
-/// - Validate CSRF tokens when enabled
-/// - Extract a JWT from cookies and authenticate the request
-/// - Inject the authentication result (`Option<CurrentUser>`)
-///   into the GraphQL execution context
+/// - Validate CSRF tokens when CSRF protection is enabled
+/// - Extract a JWT from cookies
+/// - Authenticate the request and build `CurrentUser`
+/// - Inject `Option<CurrentUser>` into the GraphQL context
 ///
 /// # Non-Responsibilities
 ///
-/// - Authorization (role checks, permissions)
-/// - Domain-specific interpretation of the authenticated subject
-/// - Error shaping for application-specific use cases
+/// - Authorization (roles, permissions, access control)
+/// - Interpreting the meaning of the authenticated subject
+/// - Shaping application-specific error responses
 ///
 /// # Authentication Model
 ///
-/// - If authentication succeeds, `Some(CurrentUser)` is injected
-/// - If authentication fails or is disabled, `None` is injected
+/// - `Some(CurrentUser)` is injected when authentication succeeds
+/// - `None` is injected when authentication is disabled or fails
 ///
 /// This allows resolvers to explicitly distinguish between
-/// *unauthenticated* and *authenticated* requests using the type system.
+/// *authenticated* and *unauthenticated* requests using the type system.
 ///
 /// # Type Parameters
 ///
@@ -48,9 +54,9 @@ use crate::graphql::guard::validate_csrf_guard;
 /// - `M`: GraphQL mutation root
 /// - `S`: GraphQL subscription root
 ///
-/// All type parameters must be `Send + Sync + 'static` to satisfy
-/// `async-graphql` execution requirements.
-pub async fn graphql_handler<Q, M, S>(
+/// All type parameters must satisfy `Send + Sync + 'static`
+/// to meet `async-graphql` execution requirements.
+pub async fn graphql_post_handler<Q, M, S>(
     Extension(schema): Extension<Schema<Q, M, S>>,
     Extension(enable_csrf): Extension<bool>,
     Extension(csrf_cfg): Extension<CsrfConfig>,
@@ -69,9 +75,9 @@ where
     // CSRF validation
     // -----------------------------
     //
-    // When CSRF protection is enabled, validate the request headers
-    // and cookies. On failure, return a GraphQL-compliant error
-    // response (HTTP 200 with `errors` field).
+    // When CSRF protection is enabled, validate the request
+    // headers and cookies. On failure, return a GraphQL-
+    // compliant error response (HTTP 200 with `errors`).
     if let Err(resp) = validate_csrf_guard(enable_csrf, &headers, &jar, &csrf_cfg) {
         return resp.into();
     }
@@ -101,4 +107,49 @@ where
         .execute(req.into_inner().data(current_user))
         .await
         .into()
+}
+
+#[tokio::test]
+async fn graphql_handler_executes_query() {
+    use async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::{routing::post, Extension, Router};
+    use tower::ServiceExt; // oneshot
+
+    struct Query;
+
+    #[Object]
+    impl Query {
+        async fn dummy(&self) -> &str {
+            "ok"
+        }
+    }
+
+    let schema = Schema::build(Query, EmptyMutation, EmptySubscription).finish();
+
+    let app = Router::new()
+        .route(
+            "/graphql",
+            post(graphql_post_handler::<Query, EmptyMutation, EmptySubscription>),
+        )
+        .layer(Extension(schema))
+        .layer(Extension(false)) // CSRF disabled
+        .layer(Extension(CsrfConfig::from_env_with(|_| None)))
+        .layer(Extension(None::<String>))
+        .layer(Extension(GraphqlAuthConfig::new("auth")));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/graphql")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"query":"{ dummy }"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
 }
