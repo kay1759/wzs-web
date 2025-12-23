@@ -2,11 +2,114 @@ use axum::http::HeaderMap;
 use axum_extra::extract::cookie::CookieJar;
 
 use crate::auth::jwt::decode_jwt;
+use crate::auth::CurrentUser;
 
-/// Extract subject ID from JWT cookie.
+/// Extract an authenticated principal (`CurrentUser`) from a JWT stored in a cookie.
 ///
-/// This function is application-agnostic.
-/// Cookie name and ID parsing are delegated to the caller.
+/// # Overview
+///
+/// This function is **application-agnostic** and performs only authentication:
+///
+/// - Reads a JWT from a cookie
+/// - Verifies it using the provided secret
+/// - Extracts the `sub` (subject) claim
+/// - Wraps it in [`CurrentUser`]
+///
+/// It does **not**:
+///
+/// - Interpret the subject
+/// - Perform authorization
+/// - Map the subject to any domain concept (user / member / admin)
+///
+/// # Parameters
+///
+/// - `jar`:
+///   The cookie jar containing the JWT cookie.
+/// - `headers`:
+///   Currently unused, but kept for forward compatibility
+///   (e.g. Authorization header support).
+/// - `jwt_secret`:
+///   The secret used to verify the JWT.
+///   If `None`, authentication is disabled and this function always returns `None`.
+/// - `cookie_name`:
+///   The name of the cookie containing the JWT payload.
+///
+/// # Returns
+///
+/// - `Some(CurrentUser)` if a valid JWT is found and verified
+/// - `None` otherwise
+///
+/// # Design Notes
+///
+/// This function represents the **authentication boundary** of `wzs-web`.
+/// All authorization and domain-specific interpretation must be done
+/// by the application layer.
+///
+/// # Example
+///
+/// ```ignore
+/// use wzs_web::graphql::context::extract_current_user;
+///
+/// let user = extract_current_user(
+///     &jar,
+///     &headers,
+///     Some("secret"),
+///     "auth_token",
+/// );
+/// ```
+pub fn extract_current_user(
+    jar: &CookieJar,
+    _headers: &HeaderMap,
+    jwt_secret: Option<&str>,
+    cookie_name: &str,
+) -> Option<CurrentUser> {
+    let secret = jwt_secret?;
+
+    jar.get(cookie_name)
+        .and_then(|cookie| serde_json::from_str::<serde_json::Value>(cookie.value()).ok())
+        .and_then(|value| value.get("token")?.as_str().map(String::from))
+        .and_then(|token| decode_jwt(&token, secret).ok())
+        .map(|claims| CurrentUser::new(claims.sub))
+}
+
+/// Extract a parsed value from the JWT `sub` (subject) claim.
+///
+/// # Deprecated
+///
+/// This function is deprecated in favor of [`extract_current_user`].
+/// New code should extract a [`CurrentUser`] first and perform parsing
+/// or interpretation in the application layer.
+///
+/// # Rationale
+///
+/// Returning a parsed value ties authentication to application semantics.
+/// Using [`CurrentUser`] keeps `wzs-web` independent from domain concepts.
+///
+/// # Migration
+///
+/// ```ignore
+/// // Old
+/// let member_id: Option<i64> = extract_jwt_subject(
+///     &jar,
+///     &headers,
+///     Some(secret),
+///     "auth_token",
+///     |sub| sub.parse().ok(),
+/// );
+///
+/// // New
+/// let member_id: Option<i64> = extract_current_user(
+///     &jar,
+///     &headers,
+///     Some(secret),
+///     "auth_token",
+/// )
+/// .and_then(|u| u.subject.parse().ok());
+/// ```
+#[deprecated(
+    since = "0.4.0",
+    note = "Use `extract_current_user` and parse the subject in the application layer"
+)]
 pub fn extract_jwt_subject<F, T>(
     jar: &CookieJar,
     headers: &HeaderMap,
@@ -17,13 +120,8 @@ pub fn extract_jwt_subject<F, T>(
 where
     F: Fn(&str) -> Option<T>,
 {
-    let secret = jwt_secret?;
-
-    jar.get(cookie_name)
-        .and_then(|c| serde_json::from_str::<serde_json::Value>(c.value()).ok())
-        .and_then(|v| v.get("token")?.as_str().map(String::from))
-        .and_then(|token| decode_jwt(&token, secret).ok())
-        .and_then(|claims| parse(&claims.sub))
+    extract_current_user(jar, headers, jwt_secret, cookie_name)
+        .and_then(|user| parse(&user.subject))
 }
 
 #[cfg(test)]
@@ -37,117 +135,64 @@ mod tests {
     const JWT_SECRET: &str = "unit-test-secret";
     const COOKIE_NAME: &str = "auth_token";
 
-    fn empty_headers() -> HeaderMap {
+    fn headers() -> HeaderMap {
         HeaderMap::new()
     }
 
-    fn empty_jar() -> CookieJar {
-        CookieJar::new()
+    fn jar_with_token(token: &str) -> CookieJar {
+        CookieJar::new().add(Cookie::new(
+            COOKIE_NAME,
+            format!(r#"{{ "token": "{}" }}"#, token),
+        ))
     }
 
     #[test]
-    fn returns_none_when_secret_is_missing() {
-        let jar = empty_jar();
-        let headers = empty_headers();
+    fn returns_none_when_jwt_secret_is_none() {
+        let jar = CookieJar::new();
 
-        let result: Option<i64> = extract_jwt_subject(&jar, &headers, None, COOKIE_NAME, |sub| {
-            sub.parse::<i64>().ok()
-        });
+        let user = extract_current_user(&jar, &headers(), None, COOKIE_NAME);
 
-        assert!(result.is_none());
+        assert!(user.is_none());
     }
 
     #[test]
     fn returns_none_when_cookie_is_missing() {
-        let jar = empty_jar();
-        let headers = empty_headers();
+        let jar = CookieJar::new();
 
-        let result: Option<i64> =
-            extract_jwt_subject(&jar, &headers, Some(JWT_SECRET), COOKIE_NAME, |sub| {
-                sub.parse::<i64>().ok()
-            });
+        let user = extract_current_user(&jar, &headers(), Some(JWT_SECRET), COOKIE_NAME);
 
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn returns_none_when_cookie_value_is_not_json() {
-        let jar = CookieJar::new().add(Cookie::new(COOKIE_NAME, "not-json"));
-        let headers = empty_headers();
-
-        let result: Option<i64> =
-            extract_jwt_subject(&jar, &headers, Some(JWT_SECRET), COOKIE_NAME, |sub| {
-                sub.parse::<i64>().ok()
-            });
-
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn returns_none_when_token_field_is_missing() {
-        let jar = CookieJar::new().add(Cookie::new(COOKIE_NAME, r#"{ "unexpected": "value" }"#));
-        let headers = empty_headers();
-
-        let result: Option<i64> =
-            extract_jwt_subject(&jar, &headers, Some(JWT_SECRET), COOKIE_NAME, |sub| {
-                sub.parse::<i64>().ok()
-            });
-
-        assert!(result.is_none());
+        assert!(user.is_none());
     }
 
     #[test]
     fn returns_none_when_jwt_is_invalid() {
-        let jar = CookieJar::new().add(Cookie::new(
-            COOKIE_NAME,
-            r#"{ "token": "invalid.jwt.token" }"#,
-        ));
-        let headers = empty_headers();
+        let jar = jar_with_token("invalid.jwt.token");
 
-        let result: Option<i64> =
-            extract_jwt_subject(&jar, &headers, Some(JWT_SECRET), COOKIE_NAME, |sub| {
-                sub.parse::<i64>().ok()
-            });
+        let user = extract_current_user(&jar, &headers(), Some(JWT_SECRET), COOKIE_NAME);
 
-        assert!(result.is_none());
+        assert!(user.is_none());
     }
 
     #[test]
-    fn returns_subject_when_jwt_is_valid() {
+    fn returns_current_user_when_jwt_is_valid() {
         let token = create_jwt(42, JWT_SECRET).unwrap();
+        let jar = jar_with_token(&token);
 
-        let jar = CookieJar::new().add(Cookie::new(
-            COOKIE_NAME,
-            format!(r#"{{ "token": "{}" }}"#, token),
-        ));
-        let headers = empty_headers();
+        let user = extract_current_user(&jar, &headers(), Some(JWT_SECRET), COOKIE_NAME).unwrap();
 
-        let result: Option<i64> =
-            extract_jwt_subject(&jar, &headers, Some(JWT_SECRET), COOKIE_NAME, |sub| {
-                sub.parse::<i64>().ok()
-            });
-
-        assert_eq!(result, Some(42));
+        assert_eq!(user.subject, "42");
     }
 
     #[test]
-    fn returns_none_when_subject_parsing_fails() {
-        let token = create_jwt(42, JWT_SECRET).unwrap();
+    fn deprecated_extract_jwt_subject_still_works() {
+        let token = create_jwt(99, JWT_SECRET).unwrap();
+        let jar = jar_with_token(&token);
 
-        let jar = CookieJar::new().add(Cookie::new(
-            COOKIE_NAME,
-            format!(r#"{{ "token": "{}" }}"#, token),
-        ));
-        let headers = empty_headers();
+        let id: Option<i64> =
+            extract_jwt_subject(&jar, &headers(), Some(JWT_SECRET), COOKIE_NAME, |sub| {
+                sub.parse().ok()
+            });
 
-        let result: Option<()> = extract_jwt_subject(
-            &jar,
-            &headers,
-            Some(JWT_SECRET),
-            COOKIE_NAME,
-            |_| None, // intentionally fail parsing
-        );
-
-        assert!(result.is_none());
+        assert_eq!(id, Some(99));
     }
 }
