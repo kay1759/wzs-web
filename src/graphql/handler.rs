@@ -1,4 +1,4 @@
-use async_graphql::Schema;
+use async_graphql::{ObjectType, Schema, SubscriptionType};
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 use axum::http::HeaderMap;
 use axum::Extension;
@@ -61,9 +61,9 @@ pub async fn graphql_handler<Q, M, S>(
     req: GraphQLRequest,
 ) -> GraphQLResponse
 where
-    Q: Send + Sync + 'static,
-    M: Send + Sync + 'static,
-    S: Send + Sync + 'static,
+    Q: ObjectType + Send + Sync + 'static,
+    M: ObjectType + Send + Sync + 'static,
+    S: SubscriptionType + Send + Sync + 'static,
 {
     // -----------------------------
     // CSRF validation
