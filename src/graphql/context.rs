@@ -72,58 +72,6 @@ pub fn extract_current_user(
         .map(|claims| CurrentUser::new(claims.sub))
 }
 
-/// Extract a parsed value from the JWT `sub` (subject) claim.
-///
-/// # Deprecated
-///
-/// This function is deprecated in favor of [`extract_current_user`].
-/// New code should extract a [`CurrentUser`] first and perform parsing
-/// or interpretation in the application layer.
-///
-/// # Rationale
-///
-/// Returning a parsed value ties authentication to application semantics.
-/// Using [`CurrentUser`] keeps `wzs-web` independent from domain concepts.
-///
-/// # Migration
-///
-/// ```ignore
-/// // Old
-/// let member_id: Option<i64> = extract_jwt_subject(
-///     &jar,
-///     &headers,
-///     Some(secret),
-///     "auth_token",
-///     |sub| sub.parse().ok(),
-/// );
-///
-/// // New
-/// let member_id: Option<i64> = extract_current_user(
-///     &jar,
-///     &headers,
-///     Some(secret),
-///     "auth_token",
-/// )
-/// .and_then(|u| u.subject.parse().ok());
-/// ```
-#[deprecated(
-    since = "0.4.0",
-    note = "Use `extract_current_user` and parse the subject in the application layer"
-)]
-pub fn extract_jwt_subject<F, T>(
-    jar: &CookieJar,
-    headers: &HeaderMap,
-    jwt_secret: Option<&str>,
-    cookie_name: &str,
-    parse: F,
-) -> Option<T>
-where
-    F: Fn(&str) -> Option<T>,
-{
-    extract_current_user(jar, headers, jwt_secret, cookie_name)
-        .and_then(|user| parse(&user.subject))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,18 +129,5 @@ mod tests {
         let user = extract_current_user(&jar, &headers(), Some(JWT_SECRET), COOKIE_NAME).unwrap();
 
         assert_eq!(user.subject, "42");
-    }
-
-    #[test]
-    fn deprecated_extract_jwt_subject_still_works() {
-        let token = create_jwt(99, JWT_SECRET).unwrap();
-        let jar = jar_with_token(&token);
-
-        let id: Option<i64> =
-            extract_jwt_subject(&jar, &headers(), Some(JWT_SECRET), COOKIE_NAME, |sub| {
-                sub.parse().ok()
-            });
-
-        assert_eq!(id, Some(99));
     }
 }
