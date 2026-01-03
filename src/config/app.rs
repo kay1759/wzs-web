@@ -48,6 +48,7 @@ use crate::config::{
     db::DbConfig,
     env::*,
     image::ImageConfig,
+    mail::MailConfig,
     upload::UploadConfig,
     web::{CorsConfig, HttpConfig},
 };
@@ -74,6 +75,8 @@ pub struct AppConfig {
     pub image: ImageConfig,
     /// File and image upload directory configuration.
     pub upload: UploadConfig,
+    /// Optional mail (SMTP) configuration.
+    pub mail: Option<MailConfig>,
     /// Whether the GraphiQL IDE is enabled (typically only in development).
     pub enable_graphiql: bool,
     /// JWT signing secret.
@@ -145,6 +148,13 @@ impl AppConfig {
         let image_dir = env::var("UPLOAD_IMAGE_DIR").unwrap_or_else(|_| "images".into());
         let file_dir = env::var("UPLOAD_FILE_DIR").unwrap_or_else(|_| "files".into());
 
+        // --- Mail configuration (optional) ---
+        let mail = if env::var("SMTP_HOST").is_ok() {
+            MailConfig::from_env().ok()
+        } else {
+            None
+        };
+
         let enable_graphiql = read_flag("GRAPHIQL", false);
 
         // JWT & HTML
@@ -170,6 +180,7 @@ impl AppConfig {
                 image_dir,
                 file_dir,
             },
+            mail,
             enable_graphiql,
             jwt_secret,
             html_path,
@@ -360,5 +371,100 @@ mod tests {
             let cfg = AppConfig::from_env();
             assert_eq!(cfg.html_path, "/tmp/index.html");
         });
+    }
+
+    #[test]
+    fn mail_config_is_none_when_smtp_is_not_configured() {
+        temp_env::with_vars(
+            vec![
+                ("SMTP_HOST", None::<&str>),
+                ("SMTP_PORT", None::<&str>),
+                ("SMTP_USERNAME", None::<&str>),
+                ("SMTP_PASSWORD", None::<&str>),
+                ("SMTP_FROM_EMAIL", None::<&str>),
+                ("NOTIFY_TO_EMAIL", None::<&str>),
+            ],
+            || {
+                let cfg = AppConfig::from_env();
+                assert!(
+                    cfg.mail.is_none(),
+                    "Expected mail config to be None when SMTP is not configured"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn mail_config_is_none_when_required_smtp_vars_are_incomplete() {
+        temp_env::with_vars(
+            vec![
+                // SMTP_HOST exists, but others are missing
+                ("SMTP_HOST", Some("smtp.example.com")),
+                ("SMTP_PORT", None::<&str>),
+                ("SMTP_USERNAME", None::<&str>),
+                ("SMTP_PASSWORD", None::<&str>),
+                ("SMTP_FROM_EMAIL", None::<&str>),
+            ],
+            || {
+                let cfg = AppConfig::from_env();
+                assert!(
+                    cfg.mail.is_none(),
+                    "Expected mail config to be None when SMTP vars are incomplete"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn mail_config_is_loaded_when_all_required_smtp_vars_are_present() {
+        temp_env::with_vars(
+            vec![
+                ("SMTP_HOST", Some("smtp.example.com")),
+                ("SMTP_PORT", Some("587")),
+                ("SMTP_USERNAME", Some("user")),
+                ("SMTP_PASSWORD", Some("pass")),
+                ("SMTP_FROM_EMAIL", Some("noreply@example.com")),
+                ("SMTP_FROM_NAME", Some("Notifier")),
+                ("NOTIFY_TO_EMAIL", Some("notify@example.com")),
+            ],
+            || {
+                let cfg = AppConfig::from_env();
+                let mail = cfg.mail.expect("mail config should be present");
+
+                assert_eq!(mail.host, "smtp.example.com");
+                assert_eq!(mail.port, 587);
+                assert_eq!(mail.username, "user");
+                assert_eq!(mail.password, "pass");
+                assert_eq!(mail.from_email, "noreply@example.com");
+                assert_eq!(mail.from_name, "Notifier");
+                assert_eq!(mail.notify_to.as_deref(), Some("notify@example.com"));
+            },
+        );
+    }
+
+    #[test]
+    fn mail_config_uses_defaults_for_optional_fields() {
+        temp_env::with_vars(
+            vec![
+                ("SMTP_HOST", Some("smtp.example.com")),
+                ("SMTP_PORT", Some("25")),
+                ("SMTP_USERNAME", Some("user")),
+                ("SMTP_PASSWORD", Some("pass")),
+                ("SMTP_FROM_EMAIL", Some("noreply@example.com")),
+                // Optional values unset
+                ("SMTP_FROM_NAME", None),
+                ("NOTIFY_TO_EMAIL", None),
+            ],
+            || {
+                let cfg = AppConfig::from_env();
+                let mail = cfg.mail.expect("mail config should be present");
+
+                assert_eq!(mail.from_name, "Notifier");
+                assert!(
+                    mail.notify_to.is_none(),
+                    "Expected notify_to to be None when not set"
+                );
+            },
+        );
     }
 }
