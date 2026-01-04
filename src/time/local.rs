@@ -29,7 +29,7 @@ use std::str::FromStr;
 ///
 /// ## Example
 /// ```
-/// use wzs_web::utils::time::local::today_in_local;
+/// use wzs_web::time::local::today_in_local;
 /// let date = today_in_local("Asia/Tokyo").unwrap();
 /// println!("Tokyo today = {}", date);
 /// ```
@@ -47,7 +47,7 @@ pub fn today_in_local(tz_name: &str) -> Result<NaiveDate> {
 ///
 /// ## Example
 /// ```
-/// use wzs_web::utils::time::local::now_in_local;
+/// use wzs_web::time::local::now_in_local;
 /// let now_tokyo = now_in_local("Asia/Tokyo").unwrap();
 /// println!("Tokyo now = {}", now_tokyo);
 /// ```
