@@ -149,6 +149,10 @@ impl AppConfig {
         let file_dir = env::var("UPLOAD_FILE_DIR").unwrap_or_else(|_| "files".into());
 
         // --- Mail configuration (optional) ---
+        //
+        // Mail configuration is enabled only when SMTP_HOST is present.
+        // If any required SMTP variables are missing or invalid,
+        // MailConfig::from_env() returns an error and mail config is disabled.
         let mail = if env::var("SMTP_HOST").is_ok() {
             MailConfig::from_env().ok()
         } else {
@@ -437,7 +441,8 @@ mod tests {
                 assert_eq!(mail.password, "pass");
                 assert_eq!(mail.from_email, "noreply@example.com");
                 assert_eq!(mail.from_name, "Notifier");
-                assert_eq!(mail.notify_to.as_deref(), Some("notify@example.com"));
+
+                assert_eq!(mail.notify_to, vec!["notify@example.com"]);
             },
         );
     }
@@ -461,8 +466,34 @@ mod tests {
 
                 assert_eq!(mail.from_name, "Notifier");
                 assert!(
-                    mail.notify_to.is_none(),
-                    "Expected notify_to to be None when not set"
+                    mail.notify_to.is_empty(),
+                    "Expected notify_to to be empty when NOTIFY_TO_EMAIL is not set"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn mail_config_supports_multiple_notify_to_addresses() {
+        temp_env::with_vars(
+            vec![
+                ("SMTP_HOST", Some("smtp.example.com")),
+                ("SMTP_PORT", Some("587")),
+                ("SMTP_USERNAME", Some("user")),
+                ("SMTP_PASSWORD", Some("pass")),
+                ("SMTP_FROM_EMAIL", Some("noreply@example.com")),
+                (
+                    "NOTIFY_TO_EMAIL",
+                    Some("notify1@example.com, notify2@example.com"),
+                ),
+            ],
+            || {
+                let cfg = AppConfig::from_env();
+                let mail = cfg.mail.expect("mail config should be present");
+
+                assert_eq!(
+                    mail.notify_to,
+                    vec!["notify1@example.com", "notify2@example.com"]
                 );
             },
         );
