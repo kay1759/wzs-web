@@ -12,6 +12,7 @@ anyhow = "1"
 askama = "0.14"
 async-graphql = "7.0"
 async-graphql-axum = "7.0"
+async-trait = "0.1"
 axum = { version = "0.8", features = ["macros", "multipart"] }
 axum-extra = { version = "0.12", features = ["cookie", "cookie-private", "cookie-signed", "multipart"] }
 base64 = "0.22"
@@ -21,6 +22,7 @@ dotenvy = "0.15"
 hmac = "0.12"
 image = "0.25"
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 mysql = "26"
 rand = "0.9"
 sha2 = "0.10"
@@ -31,6 +33,7 @@ thiserror = "2"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1"
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
 
 [dev-dependencies]

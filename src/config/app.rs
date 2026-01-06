@@ -29,6 +29,13 @@
 //! | `UPLOAD_FILE_DIR` | Subdirectory for other file uploads | `"files"` |
 //! | `IMAGE_MAX_WIDTH` | Max allowed image width (px) | `1280` |
 //! | `IMAGE_MAX_HEIGHT` | Max allowed image height (px) | `1280` |
+//! | `SMTP_HOST` | SMTP server hostname | *none* |
+//! | `SMTP_PORT` | SMTP server port | *none* |
+//! | `SMTP_USERNAME` | SMTP authentication username | *none* |
+//! | `SMTP_PASSWORD` | SMTP authentication password | *none* |
+//! | `SMTP_FROM_EMAIL` | Sender email address | *none* |
+//! | `SMTP_FROM_NAME` | Sender display name | `"Notifier"` |
+//! | `NOTIFY_TO_EMAIL` | Notification recipients (comma-separated) | empty |
 //!
 //! # Example
 //! ```rust,no_run

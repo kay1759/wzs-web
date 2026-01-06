@@ -6,7 +6,9 @@ A reusable **Rust web foundation library** providing shared infrastructure compo
 for backend services built with **Axum**, **MySQL**, and **dotenv-based configuration**.
 
 This crate offers unified configuration management, database connection helpers,
-and security utilities (CSRF, CORS), along with image and upload configuration modules.
+security utilities (CSRF, CORS), and **a notification/email abstraction layer**,
+along with image and upload configuration modules.
+
 
 ---
 
@@ -21,6 +23,9 @@ and security utilities (CSRF, CORS), along with image and upload configuration m
 
 - **Infrastructure Abstraction**
   Generic `Db` trait and `Param` / `Value` / `Row` types for driver-agnostic persistence.
+
+- **Notification / Email Infrastructure**
+  SMTP-based email sender with a clean port/adapter design.
 
 - **Security & Web Utilities**
   Includes CSRF protection, CORS middleware, and HTML template rendering via Askama.
@@ -37,37 +42,45 @@ and security utilities (CSRF, CORS), along with image and upload configuration m
 ```
 src/
 ├── config/
-│    ├── app.rs # Loads .env and builds top-level AppConfig
-│    ├── db.rs # Database configuration and connection URL
-│    ├── csrf.rs # CSRF secret and cookie configuration
-│    ├── env.rs # Environment variable utilities
-│    ├── image.rs # Max width/height configuration for image processing
-│    ├── upload.rs # Upload directory configuration (root, image_dir, file_dir)
-│    └── web.rs # HttpConfig and CorsConfig
+│    ├── app.rs        # Loads .env and builds top-level AppConfig
+│    ├── db.rs         # Database configuration
+│    ├── csrf.rs       # CSRF configuration
+│    ├── env.rs        # Environment variable utilities
+│    ├── image.rs      # Image processing limits
+│    ├── mail.rs       # SMTP / mail configuration
+│    ├── upload.rs     # Upload directory configuration
+│    └── web.rs        # HTTP & CORS configuration
 │
 ├── db/
-│    ├── connection.rs # Shared MySQL pool (OnceLock or external injection)
-│    ├── mysql_adapter.rs # MySQL implementation of generic Db trait
-│    └── port.rs # Db trait and Row/Value abstractions
+│    ├── connection.rs # Shared MySQL pool
+│    ├── mysql_adapter.rs # MySQL implementation of Db trait
+│    └── port.rs       # Db trait and Row/Value abstractions
+│
+├── notification/
+│    ├── email.rs      # Email Value Objects (Email, EmailBody, Attachment)
+│    ├── email_sender.rs # EmailSender port (trait)
+│    ├── smtp/
+│    │    └── smtp_email_sender.rs # SMTP adapter (lettre-based)
+│    └── smtp.rs       # Module exports
 │
 ├── image/
-│    ├── image_rs_processor.rs # Image resizing implementation using image-rs
-│    └── processor.rs # Generic image processing traits and utilities
+│    ├── image_rs_processor.rs # image-rs based processor
+│    └── processor.rs # Generic image processing traits
 │
 └── web/
-     ├── csrf.rs # Token generation, verification, cookie handling
-     ├── cors.rs # CORS layer builder using tower_http
-     ├── template.rs # Askama template rendering utilities
+     ├── csrf.rs       # CSRF token handling
+     ├── cors.rs       # CORS layer builder
+     ├── template.rs   # Askama helpers
      └── upload/
-          ├── storage.rs # Storage trait abstraction (local/S3-compatible)
-          ├── local_storage.rs # Local filesystem adapter for file uploads
-          ├── uploader.rs # High-level upload service
-          └── upload_handler.rs# Axum multipart upload handler
+          ├── storage.rs
+          ├── local_storage.rs
+          ├── uploader.rs
+          └── upload_handler.rs
 ```
 
 ## Usage
 
-Add this crate to your project:
+### Basic setup
 
 ```toml
 [dependencies]
@@ -97,6 +110,34 @@ fn main() {
 }
 ```
 
+### Sending email (example)
+```
+use wzs_web::notification::{
+    email::{Email, EmailBody},
+    smtp::SmtpEmailSender,
+};
+
+let sender = SmtpEmailSender::new(
+    "smtp.example.com",
+    587,
+    "user",
+    "pass",
+    "from@example.com",
+    "Notifier",
+    vec!["to@example.com".parse()?],
+)?;
+
+let email = Email {
+    subject: "Hello".into(),
+    body: EmailBody::Text("Hello world".into()),
+    to: vec![],
+    cc: vec![],
+    bcc: vec![],
+};
+
+sender.send(email).await?;
+```
+
 ## Environment Variables
 
 | Variable               | Description                                             | Default / Example                        |
@@ -118,6 +159,30 @@ fn main() {
 | `IMAGE_MAX_WIDTH`      | Max allowed image width (px)                            | `1280`                                   |
 | `IMAGE_MAX_HEIGHT`     | Max allowed image height (px)                           | `1280`                                   |
 | `GRAPHIQL`             | Enable GraphiQL IDE (for dev only)                      | `false`                                  |
+
+### Mail / SMTP
+
+| Variable               | Description                                             | Default / Example                        |
+| ---------------------- | ------------------------------------------------------- | ---------------------------------------- |
+| `SMTP_HOST`            | SMTP server hostname                                    | `none`                                   |
+| `SMTP_PORT`            | SMTP server port                                        | `none`                                   |
+| `SMTP_USERNAME`        | SMTP username                                           | `none`                                   |
+| `SMTP_PASSWORD`        | SMTP password                                           | `none`                                   |
+| `SMTP_FROM_EMAIL`      | Sender email address                                    | `none`                                   |
+| `SMTP_FROM_NAME`       | Sender display name                                     | `"Notifier"`                             |
+| `NOTIFY_TO_EMAIL`      | Notification recipients (comma-separated)               | `empty`                                  |
+
+#### Note
+
+- Mail support is enabled only when SMTP_HOST is set.
+
+- Missing or invalid SMTP variables disable mail configuration.
+
+- NOTIFY_TO_EMAIL supports multiple addresses:
+
+```
+NOTIFY_TO_EMAIL=a@example.com,b@example.com
+```
 
 
 ## Testing
