@@ -141,6 +141,7 @@ impl AppConfig {
             .unwrap_or_else(|| (read_u32("HTTP_MAX_BODY_MB", 5) as usize) * 1024 * 1024);
 
         // CORS
+        let cors_enabled = read_flag("CORS_ENABLED", false);
         let cors_env = env::var("CORS_ORIGINS").unwrap_or_default();
         let cors_credentials = read_flag("CORS_CREDENTIALS", false);
 
@@ -179,6 +180,7 @@ impl AppConfig {
             },
             csrf: CsrfConfig::from_env(),
             cors: CorsConfig {
+                enabled: cors_enabled,
                 env: cors_env,
                 credentials: cors_credentials,
             },
@@ -248,10 +250,39 @@ mod tests {
     }
 
     #[test]
+    fn cors_enabled_is_loaded_from_env() {
+        temp_env::with_vars(
+            vec![
+                ("APP_ENV", Some("production")),
+                ("CORS_ENABLED", Some("true")),
+            ],
+            || {
+                let cfg = AppConfig::from_env();
+                assert!(cfg.cors.enabled);
+            },
+        );
+    }
+
+    #[test]
+    fn cors_enabled_defaults_to_false() {
+        temp_env::with_vars(
+            vec![
+                ("APP_ENV", Some("production")),
+                ("CORS_ENABLED", None::<&str>),
+            ],
+            || {
+                let cfg = AppConfig::from_env();
+                assert!(!cfg.cors.enabled);
+            },
+        );
+    }
+
+    #[test]
     fn from_env_uses_defaults_when_missing_optional() {
         let vars = vec![
             ("APP_ENV", Some("production")),
             ("GRAPHIQL", None),
+            ("CORS_ENABLED", None),
             ("CORS_ORIGINS", None),
             ("CORS_CREDENTIALS", None),
             ("IMAGE_MAX_WIDTH", None),
@@ -275,6 +306,7 @@ mod tests {
             assert_eq!(cfg.upload.image_dir, "images");
             assert_eq!(cfg.upload.file_dir, "files");
 
+            assert!(!cfg.cors.enabled);
             assert_eq!(cfg.cors.env, "");
             assert_eq!(cfg.cors.credentials, false);
 
@@ -290,6 +322,7 @@ mod tests {
             ("UPLOAD_ROOT", Some("/data/uploads")),
             ("UPLOAD_IMAGE_DIR", Some("pics")),
             ("UPLOAD_FILE_DIR", Some("docs")),
+            ("CORS_ENABLED", Some("true")),
             (
                 "CORS_ORIGINS",
                 Some("https://a.example.com,https://b.example.com"),
@@ -310,6 +343,7 @@ mod tests {
             assert_eq!(cfg.upload.image_dir, "pics");
             assert_eq!(cfg.upload.file_dir, "docs");
 
+            assert!(cfg.cors.enabled);
             assert_eq!(cfg.cors.env, "https://a.example.com,https://b.example.com");
             assert!(cfg.cors.credentials);
 

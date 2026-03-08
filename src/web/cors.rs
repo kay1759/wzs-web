@@ -15,13 +15,14 @@
 //! use wzs_web::web::cors::build_cors;
 //!
 //! let cfg = CorsConfig {
+//!     enabled: true,
 //!     env: "http://example.com".into(),
 //!     credentials: true,
 //! };
 //!
 //! let app: Router = Router::new()
 //!     .route("/api/hello", get(|| async { "Hello" }))
-//!     .layer(build_cors(&cfg));
+//!     .layer(build_cors(&cfg).unwrap());
 //! ```
 //!
 //! This setup will allow cross-origin requests from `http://example.com`
@@ -62,16 +63,27 @@ fn parse_origins_from_env(cors_env: String) -> Vec<HeaderValue> {
 /// use wzs_web::web::cors::build_cors;
 ///
 /// let cors = CorsConfig {
+///     enabled: true,
 ///     env: "https://frontend.example".into(),
 ///     credentials: false,
 /// };
 /// let layer = build_cors(&cors);
 /// ```
-pub fn build_cors(cors: &CorsConfig) -> CorsLayer {
+pub fn build_cors(cors: &CorsConfig) -> Option<CorsLayer> {
+    if !cors.enabled {
+        return None;
+    }
+
     let origins = parse_origins_from_env(cors.env.clone());
 
-    // Allowed origins — "*" cannot be used when credentials=true
-    let origin_cfg = if origins.is_empty() {
+    let origin_cfg = if cors.env.trim() == "*" {
+        if cors.credentials {
+            // Allowed origins — "*" cannot be used when credentials=true
+            AllowOrigin::predicate(|_origin: &HeaderValue, _req_parts| true)
+        } else {
+            AllowOrigin::any()
+        }
+    } else if origins.is_empty() {
         // Default to local dev port if not specified
         AllowOrigin::list([HeaderValue::from_static("http://localhost:5173")])
     } else {
@@ -90,7 +102,7 @@ pub fn build_cors(cors: &CorsConfig) -> CorsLayer {
         layer = layer.allow_credentials(true);
     }
 
-    layer
+    Some(layer)
 }
 
 #[cfg(test)]
@@ -120,9 +132,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn build_cors_returns_none_when_disabled() {
+        let cfg = CorsConfig {
+            enabled: false,
+            env: "http://example.com".into(),
+            credentials: true,
+        };
+
+        let layer = build_cors(&cfg);
+        assert!(layer.is_none());
+    }
+
     #[tokio::test]
     async fn cors_preflight_allows_configured_origin_and_headers() {
         let cfg = CorsConfig {
+            enabled: true,
             env: "http://example.com".into(),
             credentials: true,
         };
@@ -130,7 +155,7 @@ mod tests {
         let app = Router::new()
             .route("/test", get(|| async { "ok" }))
             .route("/test", options(|| async { StatusCode::NO_CONTENT }))
-            .layer(build_cors(&cfg));
+            .layer(build_cors(&cfg).unwrap());
 
         let req = Request::builder()
             .method("OPTIONS")
@@ -176,6 +201,7 @@ mod tests {
     #[tokio::test]
     async fn cors_defaults_to_localhost_when_env_empty() {
         let cfg = CorsConfig {
+            enabled: true,
             env: "".into(),
             credentials: false,
         };
@@ -183,7 +209,7 @@ mod tests {
         let app = Router::new()
             .route("/test", get(|| async { "ok" }))
             .route("/test", options(|| async { StatusCode::NO_CONTENT }))
-            .layer(build_cors(&cfg));
+            .layer(build_cors(&cfg).unwrap());
 
         let pre = Request::builder()
             .method("OPTIONS")
@@ -237,15 +263,15 @@ mod tests {
     #[tokio::test]
     async fn cors_actual_request_adds_credentials_header_when_enabled() {
         let cfg = CorsConfig {
+            enabled: true,
             env: "http://example.com".into(),
             credentials: true,
         };
 
         let app = Router::new()
             .route("/test", get(|| async { "ok" }))
-            .layer(build_cors(&cfg));
+            .layer(build_cors(&cfg).unwrap());
 
-        // 実リクエスト（GET）
         let req = Request::builder()
             .method("GET")
             .uri("/test")
@@ -263,6 +289,162 @@ mod tests {
                 .to_str()
                 .unwrap(),
             "http://example.com"
+        );
+
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-credentials")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "true"
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_wildcard_without_credentials_returns_star_for_any_origin() {
+        let cfg = CorsConfig {
+            enabled: true,
+            env: "*".into(),
+            credentials: false,
+        };
+
+        let app = Router::new()
+            .route("/test", get(|| async { "ok" }))
+            .route("/test", options(|| async { StatusCode::NO_CONTENT }))
+            .layer(build_cors(&cfg).unwrap());
+
+        let pre = Request::builder()
+            .method("OPTIONS")
+            .uri("/test")
+            .header("Origin", "https://any-origin.example")
+            .header("Access-Control-Request-Method", "POST")
+            .header(
+                "Access-Control-Request-Headers",
+                "x-csrf-token, content-type",
+            )
+            .body(Body::empty())
+            .unwrap();
+
+        let pre_res = app.clone().oneshot(pre).await.unwrap();
+
+        assert!(
+            matches!(pre_res.status(), StatusCode::NO_CONTENT | StatusCode::OK),
+            "unexpected status: {}",
+            pre_res.status()
+        );
+
+        assert_eq!(
+            pre_res
+                .headers()
+                .get("access-control-allow-origin")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "*"
+        );
+
+        assert!(pre_res
+            .headers()
+            .get("access-control-allow-credentials")
+            .is_none());
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/test")
+            .header("Origin", "https://any-origin.example")
+            .body(Body::empty())
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "*"
+        );
+        assert!(res
+            .headers()
+            .get("access-control-allow-credentials")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn cors_wildcard_with_credentials_reflects_origin_instead_of_star() {
+        let cfg = CorsConfig {
+            enabled: true,
+            env: "*".into(),
+            credentials: true,
+        };
+
+        let app = Router::new()
+            .route("/test", get(|| async { "ok" }))
+            .route("/test", options(|| async { StatusCode::NO_CONTENT }))
+            .layer(build_cors(&cfg).unwrap());
+
+        let origin = "https://any-origin.example";
+
+        let pre = Request::builder()
+            .method("OPTIONS")
+            .uri("/test")
+            .header("Origin", origin)
+            .header("Access-Control-Request-Method", "POST")
+            .header(
+                "Access-Control-Request-Headers",
+                "x-csrf-token, content-type",
+            )
+            .body(Body::empty())
+            .unwrap();
+
+        let pre_res = app.clone().oneshot(pre).await.unwrap();
+
+        assert!(
+            matches!(pre_res.status(), StatusCode::NO_CONTENT | StatusCode::OK),
+            "unexpected status: {}",
+            pre_res.status()
+        );
+
+        assert_eq!(
+            pre_res
+                .headers()
+                .get("access-control-allow-origin")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            origin
+        );
+
+        assert_eq!(
+            pre_res
+                .headers()
+                .get("access-control-allow-credentials")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "true"
+        );
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/test")
+            .header("Origin", origin)
+            .body(Body::empty())
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            origin
         );
 
         assert_eq!(

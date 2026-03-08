@@ -12,6 +12,7 @@
 //!
 //! let http = HttpConfig { max_body_bytes: 10 * 1024 * 1024 };
 //! let cors = CorsConfig {
+//!     enabled: true,
 //!     env: "http://localhost:5173".into(),
 //!     credentials: true,
 //! };
@@ -45,6 +46,7 @@ pub struct HttpConfig {
 /// use wzs_web::config::web::CorsConfig;
 ///
 /// let cors = CorsConfig {
+///     enabled: true,
 ///     env: "http://localhost:5173".into(),
 ///     credentials: true,
 /// };
@@ -54,6 +56,7 @@ pub struct HttpConfig {
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct CorsConfig {
+    pub enabled: bool,
     pub env: String,
     pub credentials: bool,
 }
@@ -73,16 +76,20 @@ mod tests {
     #[test]
     fn cors_config_holds_values() {
         let cfg = CorsConfig {
+            enabled: true,
             env: "http://localhost:5173".into(),
             credentials: true,
         };
+        assert!(cfg.enabled);
         assert_eq!(cfg.env, "http://localhost:5173");
         assert!(cfg.credentials);
 
         let cfg2 = CorsConfig {
+            enabled: false,
             env: "https://example.com".into(),
             credentials: false,
         };
+        assert!(!cfg2.enabled);
         assert_eq!(cfg2.env, "https://example.com");
         assert!(!cfg2.credentials);
     }
@@ -96,6 +103,7 @@ mod tests {
         assert_eq!(http_cfg, http_clone);
 
         let cors_cfg = CorsConfig {
+            enabled: true,
             env: "dev".into(),
             credentials: false,
         };
@@ -103,6 +111,7 @@ mod tests {
         assert_eq!(cors_cfg, cors_clone);
 
         let dbg = format!("{:?}", cors_cfg);
+        assert!(dbg.contains("enabled"));
         assert!(dbg.contains("dev"));
     }
 }
