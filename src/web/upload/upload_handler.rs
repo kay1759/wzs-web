@@ -7,7 +7,7 @@
 //! - Accepts `multipart/form-data` requests with file fields
 //! - Integrates with [`UploadService`] for storage and image processing
 //! - Supports CSRF validation when enabled via [`CsrfConfig`]
-//! - Returns structured JSON response (`path`, `filename`, `bytes`, `content_type`)
+//! - Returns structured JSON response (`path`, `originalFilename`, `bytes`, `contentType`)
 //!
 //! ## Example
 //! ```rust,ignore
@@ -33,12 +33,15 @@ use axum::{
 use axum_extra::extract::{cookie::CookieJar, Multipart};
 use serde::Serialize;
 
-use crate::config::csrf::CsrfConfig; // ★ 追加
+use crate::config::csrf::CsrfConfig;
 use crate::web::csrf;
 use crate::web::upload::uploader::UploadService;
 
 /// JSON response returned after a successful file upload.
+///
+/// Field names are serialized in camelCase.
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct UploadResp {
     /// Path (usually relative to `/uploads/` or media root)
     path: String,
@@ -257,9 +260,9 @@ mod tests {
         let body = res.into_body().collect().await.unwrap().to_bytes();
         let json: Json = serde_json::from_slice(&body).unwrap();
 
-        assert_eq!(json.get("original_filename").unwrap(), "hello.txt");
+        assert_eq!(json.get("originalFilename").unwrap(), "hello.txt");
         assert_eq!(json.get("bytes").unwrap(), 5);
-        assert_eq!(json.get("content_type").unwrap(), "text/plain");
+        assert_eq!(json.get("contentType").unwrap(), "text/plain");
         assert!(json.get("path").unwrap().as_str().unwrap().starts_with("/"));
     }
 
@@ -319,7 +322,7 @@ mod tests {
 
         let body = res.into_body().collect().await.unwrap().to_bytes();
         let json: Json = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json.get("original_filename").unwrap(), "hello.txt");
+        assert_eq!(json.get("originalFilename").unwrap(), "hello.txt");
         assert_eq!(json.get("bytes").unwrap(), 5);
     }
 
