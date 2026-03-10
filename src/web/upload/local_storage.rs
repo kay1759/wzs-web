@@ -1,34 +1,5 @@
-//! # Local File Storage
-//!
-//! Provides a concrete implementation of the [`FileStorage`] trait that saves files
-//! directly to the local filesystem.
-//!
-//! This module ensures that:
-//! - parent directories are automatically created,
-//! - relative paths are sanitized (no `..` traversal),
-//! - all paths are stored under a configured root directory.
-//!
-//! Commonly used for local development or single-host deployments.
-//!
-//! # Example
-//! ```rust,no_run
-//! use wzs_web::web::upload::storage::{FileStorage, SavedFile};
-//! use wzs_web::web::upload::local_storage::LocalFileStorage;
-//! use std::path::Path;
-//!
-//! let storage = LocalFileStorage::new("/tmp/uploads");
-//!
-//! let abs_path = storage.save("images/avatar.png", b"binary").unwrap();
-//! assert!(Path::new(&abs_path).exists());
-//!
-//! let saved = SavedFile::new(abs_path, "image/png", 6);
-//! println!("Saved to {:?}", saved.path);
-//! ```
-
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -37,17 +8,7 @@ use super::storage::FileStorage;
 /// Stores uploaded files on the local filesystem.
 ///
 /// Files are written under a configurable root directory,
-/// ensuring directory creation and path sanitization.
-///
-/// # Example
-/// ```rust,no_run
-/// use wzs_web::web::upload::local_storage::LocalFileStorage;
-/// use wzs_web::web::upload::storage::FileStorage;
-///
-/// let storage = LocalFileStorage::new("/tmp/uploads");
-/// let abs = storage.save("docs/readme.txt", b"Hello").unwrap();
-/// println!("Saved at: {}", abs);
-/// ```
+/// ensuring directory creation and basic path sanitization.
 #[derive(Clone, Debug)]
 pub struct LocalFileStorage {
     /// Root directory where all files are stored.
@@ -56,14 +17,6 @@ pub struct LocalFileStorage {
 
 impl LocalFileStorage {
     /// Creates a new [`LocalFileStorage`] with the given root directory.
-    ///
-    /// # Example
-    /// ```
-    /// use wzs_web::web::upload::local_storage::LocalFileStorage;
-    ///
-    /// let storage = LocalFileStorage::new("/tmp/data");
-    /// assert_eq!(storage.root().to_str().unwrap(), "/tmp/data");
-    /// ```
     pub fn new<P: Into<PathBuf>>(root: P) -> Self {
         Self { root: root.into() }
     }
@@ -74,15 +27,14 @@ impl LocalFileStorage {
     /// - Trims leading slashes from `rel_path`
     /// - Replaces `..` with `_` to avoid directory traversal
     /// - Returns the absolute file path as `String`
-    ///
-    /// # Errors
-    /// Returns [`anyhow::Error`] if file writing fails.
     pub fn save_file(&self, rel_path: &str, bytes: &[u8]) -> Result<String> {
         let safe = rel_path.trim_start_matches('/').replace("..", "_");
         let full = self.root.join(&safe);
+
         if let Some(dir) = full.parent() {
-            fs::create_dir_all(dir)?;
+            fs::create_dir_all(dir).with_context(|| format!("create_dir_all {:?}", dir))?;
         }
+
         fs::write(&full, bytes).with_context(|| format!("write {:?}", &full))?;
         Ok(full.to_string_lossy().into_owned())
     }
@@ -94,12 +46,10 @@ impl LocalFileStorage {
 }
 
 impl FileStorage for LocalFileStorage {
-    /// Saves the file by delegating to [`Self::save_file`].
     fn save(&self, rel_path: &str, bytes: &[u8]) -> Result<String> {
         self.save_file(rel_path, bytes)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

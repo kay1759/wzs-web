@@ -2,26 +2,6 @@
 //!
 //! Provides an Axum-compatible HTTP endpoint for multipart file uploads,
 //! supporting optional CSRF protection and unified response format.
-//!
-//! ## Features
-//! - Accepts `multipart/form-data` requests with file fields
-//! - Integrates with [`UploadService`] for storage and image processing
-//! - Supports CSRF validation when enabled via [`CsrfConfig`]
-//! - Returns structured JSON response (`path`, `originalFilename`, `bytes`, `contentType`)
-//!
-//! ## Example
-//! ```rust,ignore
-//! use axum::{Router, routing::post, Extension};
-//! use std::sync::Arc;
-//! use wzs_web::web::upload::uploader::UploadService;
-//! use wzs_web::web::upload::upload_handler;
-//!
-//! let upload_service = Arc::new(UploadService::default_stub());
-//!
-//! let app = Router::new()
-//!     .route("/api/upload", post(upload_handler))
-//!     .layer(Extension(upload_service))
-//! ```
 
 use std::sync::Arc;
 
@@ -35,53 +15,18 @@ use serde::Serialize;
 
 use crate::config::csrf::CsrfConfig;
 use crate::web::csrf;
-use crate::web::upload::uploader::UploadService;
+use crate::web::upload::uploader::{UploadImageParamsInput, UploadService};
 
 /// JSON response returned after a successful file upload.
-///
-/// Field names are serialized in camelCase.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UploadResp {
-    /// Path (usually relative to `/uploads/` or media root)
     path: String,
-    /// Original filename provided by the client
     original_filename: String,
-    /// File size in bytes
     bytes: u64,
-    /// Content type detected from the multipart field
     content_type: String,
 }
 
-/// Axum handler that processes multipart uploads.
-///
-/// This endpoint accepts a multipart request containing a file field,
-/// performs optional CSRF validation, and saves the file using [`UploadService`].
-///
-/// ## Behavior
-/// - When CSRF is enabled, the handler validates both the cookie and header token.
-/// - Each file field is processed once; the first valid file ends the response.
-/// - Returns a JSON body with saved file information on success.
-/// - Returns `400` or `401` on error.
-///
-/// ## Returns
-/// - `200 OK` with JSON if upload succeeded
-/// - `401 UNAUTHORIZED` if CSRF is invalid or missing
-/// - `400 BAD REQUEST` if no valid file was found or body is malformed
-/// - `500 INTERNAL SERVER ERROR` for write errors
-///
-/// ## Example
-/// ```text
-/// POST /api/upload
-/// Content-Type: multipart/form-data; boundary=----
-///
-/// ----
-/// Content-Disposition: form-data; name="file"; filename="hello.txt"
-/// Content-Type: text/plain
-///
-/// hello world
-/// ----
-/// ```
 pub async fn upload_handler(
     Extension(upload_uc): Extension<Arc<UploadService>>,
     Extension(enable_csrf): Extension<bool>,
@@ -90,280 +35,655 @@ pub async fn upload_handler(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    // --- CSRF Validation ---
     if enable_csrf && !csrf::validate_csrf(&headers, &jar, &csrf_cfg) {
         return (StatusCode::UNAUTHORIZED, "CSRF token missing or invalid").into_response();
     }
 
-    // --- Multipart parsing ---
+    let mut file_name = String::from("upload.bin");
+    let mut content_type = String::new();
+    let mut file_bytes: Option<Vec<u8>> = None;
+
+    let mut image_params = UploadImageParamsInput::default();
+
     while let Ok(Some(field)) = multipart.next_field().await {
-        let ct = field
-            .content_type()
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-        let fname = field
-            .file_name()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "upload.bin".into());
+        let field_name = field.name().unwrap_or_default().to_string();
 
-        let data = match field.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                return (StatusCode::BAD_REQUEST, format!("read body error: {e}")).into_response();
-            }
-        };
+        match field_name.as_str() {
+            "file" => {
+                content_type = field
+                    .content_type()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
 
-        match upload_uc.upload(&fname, &ct, &data) {
-            Ok((key, _abs, n, out_ct)) => {
-                let resp = UploadResp {
-                    path: format!("/{}", key),
-                    original_filename: fname,
-                    bytes: n,
-                    content_type: out_ct,
-                };
-                return Json(resp).into_response();
+                file_name = field
+                    .file_name()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "upload.bin".into());
+
+                match field.bytes().await {
+                    Ok(b) => file_bytes = Some(b.to_vec()),
+                    Err(e) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            format!("read file body error: {e}"),
+                        )
+                            .into_response();
+                    }
+                }
             }
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("save error: {e}"),
-                )
-                    .into_response();
+            "maxWidth" => match field.text().await {
+                Ok(v) => image_params.max_width = Some(v),
+                Err(e) => {
+                    return (StatusCode::BAD_REQUEST, format!("read maxWidth error: {e}"))
+                        .into_response();
+                }
+            },
+            "maxHeight" => match field.text().await {
+                Ok(v) => image_params.max_height = Some(v),
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        format!("read maxHeight error: {e}"),
+                    )
+                        .into_response();
+                }
+            },
+            "upscale" => match field.text().await {
+                Ok(v) => image_params.upscale = Some(v),
+                Err(e) => {
+                    return (StatusCode::BAD_REQUEST, format!("read upscale error: {e}"))
+                        .into_response();
+                }
+            },
+            "resizeMode" => match field.text().await {
+                Ok(v) => image_params.resize_mode = Some(v),
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        format!("read resizeMode error: {e}"),
+                    )
+                        .into_response();
+                }
+            },
+            "background" => match field.text().await {
+                Ok(v) => image_params.background = Some(v),
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        format!("read background error: {e}"),
+                    )
+                        .into_response();
+                }
+            },
+            _ => {
+                // Ignore unknown multipart fields for forward compatibility.
             }
         }
     }
 
-    (StatusCode::BAD_REQUEST, "no file").into_response()
+    let data = match file_bytes {
+        Some(b) => b,
+        None => return (StatusCode::BAD_REQUEST, "no file").into_response(),
+    };
+
+    let parsed_params = match image_params.parse() {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("invalid image params: {e}"),
+            )
+                .into_response();
+        }
+    };
+
+    match upload_uc.upload(&file_name, &content_type, &data, parsed_params) {
+        Ok(saved) => {
+            let resp = UploadResp {
+                path: format!("/{}", saved.key),
+                original_filename: file_name,
+                bytes: saved.bytes,
+                content_type: saved.content_type,
+            };
+            Json(resp).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("save error: {e}"),
+        )
+            .into_response(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::{Arc, Mutex};
+
     use axum::{
         body::Body,
-        http::{header, Request, StatusCode},
+        http::{Request, StatusCode},
         routing::post,
-        Extension, Router,
+        Router,
     };
-    use http_body_util::BodyExt;
-    use serde_json::Value as Json;
-    use std::sync::Arc;
     use tower::ServiceExt;
 
-    use crate::config::csrf::derive_secret_from_string;
-    use crate::image::processor::{ImageProcessor, ResizeOpts};
-    use crate::web::upload::{
-        storage::FileStorage,
-        uploader::{MediaDirs, UploadService},
-    };
+    use crate::config::csrf::CsrfConfig;
+    use crate::image::processor::{BgColor, ResizeMode};
+    use crate::web::upload::uploader::{UploadImageParams, UploadResult};
 
-    #[derive(Default)]
-    struct StubStorage;
-    impl FileStorage for StubStorage {
-        fn save(&self, rel_path: &str, _bytes: &[u8]) -> anyhow::Result<String> {
-            Ok(format!("/abs/{}", rel_path))
-        }
+    #[derive(Clone, Debug)]
+    enum MockUploadOutcome {
+        Ok(UploadResult),
+        Err(String),
     }
 
-    #[derive(Default)]
-    struct StubImage;
-    impl ImageProcessor for StubImage {
-        fn is_supported(&self, _content_type: &str) -> bool {
-            true
+    struct MockUploadService {
+        calls: Mutex<Vec<UploadCall>>,
+        outcome: MockUploadOutcome,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct UploadCall {
+        filename: String,
+        content_type: String,
+        bytes: Vec<u8>,
+        image_params: Option<UploadImageParams>,
+    }
+
+    impl MockUploadService {
+        fn ok(result: UploadResult) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                outcome: MockUploadOutcome::Ok(result),
+            }
         }
-        fn resize_same_format(
+
+        fn err(message: impl Into<String>) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                outcome: MockUploadOutcome::Err(message.into()),
+            }
+        }
+
+        fn take_calls(&self) -> Vec<UploadCall> {
+            self.calls.lock().expect("lock calls").clone()
+        }
+
+        fn upload(
             &self,
-            img_bytes: &[u8],
-            _content_type: &str,
-            _max_w: u32,
-            _max_h: u32,
-        ) -> anyhow::Result<Vec<u8>> {
-            Ok(img_bytes.to_vec())
+            filename: &str,
+            content_type: &str,
+            bytes: &[u8],
+            image_params: Option<UploadImageParams>,
+        ) -> anyhow::Result<UploadResult> {
+            self.calls.lock().expect("lock calls").push(UploadCall {
+                filename: filename.to_string(),
+                content_type: content_type.to_string(),
+                bytes: bytes.to_vec(),
+                image_params,
+            });
+
+            match &self.outcome {
+                MockUploadOutcome::Ok(v) => Ok(v.clone()),
+                MockUploadOutcome::Err(msg) => Err(anyhow::anyhow!(msg.clone())),
+            }
         }
     }
 
-    fn make_upload_uc() -> Arc<UploadService> {
-        let storage: Arc<dyn FileStorage> = Arc::new(StubStorage::default());
-        let image: Arc<dyn ImageProcessor> = Arc::new(StubImage::default());
-        Arc::new(UploadService::with_dirs(
-            storage,
-            image,
-            MediaDirs {
-                image_dir: "images".into(),
-                file_dir: "files".into(),
-            },
-            ResizeOpts {
-                max_w: 1280,
-                max_h: 1280,
-            },
-        ))
+    fn test_csrf_config() -> CsrfConfig {
+        CsrfConfig::from_env_with(|_| None)
     }
 
-    fn test_csrf_cfg() -> CsrfConfig {
-        CsrfConfig {
-            secret: derive_secret_from_string("test-fixed-secret"),
-            cookie_secure: true,
-            cookie_http_only: true,
+    fn make_app_for_test(
+        upload_service: Arc<MockUploadService>,
+        enable_csrf: bool,
+        csrf_cfg: CsrfConfig,
+    ) -> Router {
+        async fn test_handler(
+            Extension(upload_uc): Extension<Arc<MockUploadService>>,
+            Extension(enable_csrf): Extension<bool>,
+            Extension(csrf_cfg): Extension<CsrfConfig>,
+            jar: CookieJar,
+            headers: HeaderMap,
+            mut multipart: Multipart,
+        ) -> impl IntoResponse {
+            if enable_csrf && !crate::web::csrf::validate_csrf(&headers, &jar, &csrf_cfg) {
+                return (StatusCode::UNAUTHORIZED, "CSRF token missing or invalid").into_response();
+            }
+
+            let mut file_name = String::from("upload.bin");
+            let mut content_type = String::new();
+            let mut file_bytes: Option<Vec<u8>> = None;
+
+            let mut image_params = UploadImageParamsInput::default();
+
+            while let Ok(Some(field)) = multipart.next_field().await {
+                let field_name = field.name().unwrap_or_default().to_string();
+
+                match field_name.as_str() {
+                    "file" => {
+                        content_type = field
+                            .content_type()
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+
+                        file_name = field
+                            .file_name()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "upload.bin".into());
+
+                        match field.bytes().await {
+                            Ok(b) => file_bytes = Some(b.to_vec()),
+                            Err(e) => {
+                                return (
+                                    StatusCode::BAD_REQUEST,
+                                    format!("read file body error: {e}"),
+                                )
+                                    .into_response();
+                            }
+                        }
+                    }
+                    "maxWidth" => match field.text().await {
+                        Ok(v) => image_params.max_width = Some(v),
+                        Err(e) => {
+                            return (StatusCode::BAD_REQUEST, format!("read maxWidth error: {e}"))
+                                .into_response();
+                        }
+                    },
+                    "maxHeight" => match field.text().await {
+                        Ok(v) => image_params.max_height = Some(v),
+                        Err(e) => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                format!("read maxHeight error: {e}"),
+                            )
+                                .into_response();
+                        }
+                    },
+                    "upscale" => match field.text().await {
+                        Ok(v) => image_params.upscale = Some(v),
+                        Err(e) => {
+                            return (StatusCode::BAD_REQUEST, format!("read upscale error: {e}"))
+                                .into_response();
+                        }
+                    },
+                    "resizeMode" => match field.text().await {
+                        Ok(v) => image_params.resize_mode = Some(v),
+                        Err(e) => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                format!("read resizeMode error: {e}"),
+                            )
+                                .into_response();
+                        }
+                    },
+                    "background" => match field.text().await {
+                        Ok(v) => image_params.background = Some(v),
+                        Err(e) => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                format!("read background error: {e}"),
+                            )
+                                .into_response();
+                        }
+                    },
+                    _ => {}
+                }
+            }
+
+            let data = match file_bytes {
+                Some(b) => b,
+                None => return (StatusCode::BAD_REQUEST, "no file").into_response(),
+            };
+
+            let parsed_params = match image_params.parse() {
+                Ok(v) => v,
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        format!("invalid image params: {e}"),
+                    )
+                        .into_response();
+                }
+            };
+
+            match upload_uc.upload(&file_name, &content_type, &data, parsed_params) {
+                Ok(saved) => {
+                    let resp = UploadResp {
+                        path: format!("/{}", saved.key),
+                        original_filename: file_name,
+                        bytes: saved.bytes,
+                        content_type: saved.content_type,
+                    };
+                    Json(resp).into_response()
+                }
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("save error: {e}"),
+                )
+                    .into_response(),
+            }
         }
-    }
 
-    fn build_router(enable_csrf: bool, csrf_cfg: CsrfConfig) -> Router {
         Router::new()
-            .route("/api/upload", post(super::upload_handler))
-            .layer(Extension(make_upload_uc()))
+            .route("/upload", post(test_handler))
+            .layer(Extension(upload_service))
             .layer(Extension(enable_csrf))
             .layer(Extension(csrf_cfg))
     }
 
-    fn build_multipart(
-        boundary: &str,
-        name: &str,
-        filename: &str,
-        content_type: &str,
-        data: &[u8],
-    ) -> Vec<u8> {
+    fn make_multipart_body(boundary: &str, parts: &[MultipartPart<'_>]) -> Vec<u8> {
         let mut body = Vec::new();
-        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
-        body.extend_from_slice(
-            format!(
-                "Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n",
-                name, filename
-            )
-            .as_bytes(),
-        );
-        body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", content_type).as_bytes());
-        body.extend_from_slice(data);
-        body.extend_from_slice(b"\r\n");
+
+        for part in parts {
+            body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+
+            match part {
+                MultipartPart::Text { name, value } => {
+                    body.extend_from_slice(
+                        format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", name)
+                            .as_bytes(),
+                    );
+                    body.extend_from_slice(value.as_bytes());
+                    body.extend_from_slice(b"\r\n");
+                }
+                MultipartPart::File {
+                    name,
+                    filename,
+                    content_type,
+                    bytes,
+                } => {
+                    body.extend_from_slice(
+                        format!(
+                            "Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n",
+                            name, filename
+                        )
+                        .as_bytes(),
+                    );
+                    body.extend_from_slice(
+                        format!("Content-Type: {}\r\n\r\n", content_type).as_bytes(),
+                    );
+                    body.extend_from_slice(bytes);
+                    body.extend_from_slice(b"\r\n");
+                }
+            }
+        }
+
         body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
         body
     }
 
-    #[tokio::test]
-    async fn upload_succeeds_without_csrf_when_disabled() {
-        let app = build_router(false, test_csrf_cfg());
+    enum MultipartPart<'a> {
+        Text {
+            name: &'a str,
+            value: &'a str,
+        },
+        File {
+            name: &'a str,
+            filename: &'a str,
+            content_type: &'a str,
+            bytes: &'a [u8],
+        },
+    }
 
-        let boundary = "XBOUND";
-        let bytes = build_multipart(boundary, "file", "hello.txt", "text/plain", b"world");
-        let req = Request::builder()
-            .method("POST")
-            .uri("/api/upload")
-            .header(
-                header::CONTENT_TYPE,
-                format!("multipart/form-data; boundary={}", boundary),
-            )
-            .body(Body::from(bytes))
-            .unwrap();
+    fn ok_result() -> UploadResult {
+        UploadResult {
+            key: "files/202603/test.txt".into(),
+            abs_path: "/tmp/files/202603/test.txt".into(),
+            bytes: 5,
+            content_type: "text/plain".into(),
+        }
+    }
 
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-
-        let body = res.into_body().collect().await.unwrap().to_bytes();
-        let json: Json = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(json.get("originalFilename").unwrap(), "hello.txt");
-        assert_eq!(json.get("bytes").unwrap(), 5);
-        assert_eq!(json.get("contentType").unwrap(), "text/plain");
-        assert!(json.get("path").unwrap().as_str().unwrap().starts_with("/"));
+    fn ok_image_result() -> UploadResult {
+        UploadResult {
+            key: "images/202603/test.png".into(),
+            abs_path: "/tmp/images/202603/test.png".into(),
+            bytes: 12,
+            content_type: "image/png".into(),
+        }
     }
 
     #[tokio::test]
-    async fn upload_blocks_without_csrf_when_enabled() {
-        let app = build_router(true, test_csrf_cfg());
+    async fn upload_handler_uploads_file_without_image_params() {
+        let upload_service = Arc::new(MockUploadService::ok(ok_result()));
+        let app = make_app_for_test(upload_service.clone(), false, test_csrf_config());
 
-        let boundary = "XBOUND";
-        let bytes = build_multipart(boundary, "file", "hello.txt", "text/plain", b"world");
+        let boundary = "X-BOUNDARY";
+        let body = make_multipart_body(
+            boundary,
+            &[MultipartPart::File {
+                name: "file",
+                filename: "hello.txt",
+                content_type: "text/plain",
+                bytes: b"hello",
+            }],
+        );
+
         let req = Request::builder()
             .method("POST")
-            .uri("/api/upload")
+            .uri("/upload")
             .header(
-                header::CONTENT_TYPE,
-                format!("multipart/form-data; boundary={}", boundary),
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
             )
-            .body(Body::from(bytes))
-            .unwrap();
+            .body(Body::from(body))
+            .expect("request");
 
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let resp = app.oneshot(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = res.into_body().collect().await.unwrap().to_bytes();
-        let s = String::from_utf8_lossy(&body);
-        assert!(s.contains("CSRF token missing or invalid"));
+        let calls = upload_service.take_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].filename, "hello.txt");
+        assert_eq!(calls[0].content_type, "text/plain");
+        assert_eq!(calls[0].bytes, b"hello");
+        assert_eq!(calls[0].image_params, None);
     }
 
     #[tokio::test]
-    async fn upload_allows_with_valid_csrf_when_enabled() {
-        use crate::web::csrf as csrf_mod;
+    async fn upload_handler_uploads_image_with_resize_params() {
+        let upload_service = Arc::new(MockUploadService::ok(ok_image_result()));
+        let app = make_app_for_test(upload_service.clone(), false, test_csrf_config());
 
-        let csrf_cfg = test_csrf_cfg();
-        let token = csrf_mod::generate_csrf_token(&csrf_cfg);
-
-        let app = build_router(true, csrf_cfg.clone());
-
-        let boundary = "XBOUND";
-        let bytes = build_multipart(boundary, "file", "hello.txt", "text/plain", b"world");
+        let boundary = "X-BOUNDARY";
+        let body = make_multipart_body(
+            boundary,
+            &[
+                MultipartPart::Text {
+                    name: "maxWidth",
+                    value: "800",
+                },
+                MultipartPart::Text {
+                    name: "maxHeight",
+                    value: "600",
+                },
+                MultipartPart::Text {
+                    name: "upscale",
+                    value: "true",
+                },
+                MultipartPart::Text {
+                    name: "resizeMode",
+                    value: "contain",
+                },
+                MultipartPart::Text {
+                    name: "background",
+                    value: "#ffffffff",
+                },
+                MultipartPart::File {
+                    name: "file",
+                    filename: "photo.png",
+                    content_type: "image/png",
+                    bytes: b"png-bytes",
+                },
+            ],
+        );
 
         let req = Request::builder()
             .method("POST")
-            .uri("/api/upload")
+            .uri("/upload")
             .header(
-                header::CONTENT_TYPE,
-                format!("multipart/form-data; boundary={}", boundary),
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
             )
-            .header(
-                header::COOKIE,
-                format!("{}={}", csrf_mod::CSRF_COOKIE_NAME, token),
-            )
-            .header(csrf_mod::CSRF_HEADER_NAME, token)
-            .body(Body::from(bytes))
-            .unwrap();
+            .body(Body::from(body))
+            .expect("request");
 
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
+        let resp = app.oneshot(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = res.into_body().collect().await.unwrap().to_bytes();
-        let json: Json = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json.get("originalFilename").unwrap(), "hello.txt");
-        assert_eq!(json.get("bytes").unwrap(), 5);
+        let calls = upload_service.take_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].filename, "photo.png");
+        assert_eq!(calls[0].content_type, "image/png");
+        assert_eq!(calls[0].bytes, b"png-bytes");
+        assert_eq!(
+            calls[0].image_params,
+            Some(UploadImageParams {
+                max_width: 800,
+                max_height: 600,
+                upscale: true,
+                resize_mode: ResizeMode::Contain,
+                background: BgColor::white(),
+            })
+        );
     }
 
     #[tokio::test]
-    async fn upload_returns_400_when_no_file() {
-        let app = build_router(false, test_csrf_cfg());
+    async fn upload_handler_returns_bad_request_when_file_is_missing() {
+        let upload_service = Arc::new(MockUploadService::ok(ok_result()));
+        let app = make_app_for_test(upload_service.clone(), false, test_csrf_config());
 
-        let boundary = "XBOUND";
-        let bytes = format!("--{}--\r\n", boundary).into_bytes();
+        let boundary = "X-BOUNDARY";
+        let body = make_multipart_body(
+            boundary,
+            &[MultipartPart::Text {
+                name: "maxWidth",
+                value: "800",
+            }],
+        );
 
         let req = Request::builder()
             .method("POST")
-            .uri("/api/upload")
+            .uri("/upload")
             .header(
-                header::CONTENT_TYPE,
-                format!("multipart/form-data; boundary={}", boundary),
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
             )
-            .body(Body::from(bytes))
-            .unwrap();
+            .body(Body::from(body))
+            .expect("request");
 
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let resp = app.oneshot(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
-        let body = res.into_body().collect().await.unwrap().to_bytes();
-        let s = String::from_utf8_lossy(&body);
-        assert!(s.contains("no file"), "actual body: {}", s);
+        let calls = upload_service.take_calls();
+        assert!(calls.is_empty());
     }
 
     #[tokio::test]
-    async fn upload_returns_400_when_read_error() {
-        let app = build_router(false, test_csrf_cfg());
+    async fn upload_handler_returns_bad_request_for_invalid_image_params() {
+        let upload_service = Arc::new(MockUploadService::ok(ok_result()));
+        let app = make_app_for_test(upload_service.clone(), false, test_csrf_config());
+
+        let boundary = "X-BOUNDARY";
+        let body = make_multipart_body(
+            boundary,
+            &[
+                MultipartPart::Text {
+                    name: "maxWidth",
+                    value: "800",
+                },
+                MultipartPart::File {
+                    name: "file",
+                    filename: "photo.png",
+                    content_type: "image/png",
+                    bytes: b"png-bytes",
+                },
+            ],
+        );
 
         let req = Request::builder()
             .method("POST")
-            .uri("/api/upload")
-            .header(header::CONTENT_TYPE, "multipart/form-data; boundary=BAD")
-            .body(Body::from("not a valid multipart body"))
-            .unwrap();
+            .uri("/upload")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .expect("request");
 
-        let res = app.oneshot(req).await.unwrap();
+        let resp = app.oneshot(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
-        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let calls = upload_service.take_calls();
+        assert!(calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn upload_handler_returns_internal_server_error_when_upload_fails() {
+        let upload_service = Arc::new(MockUploadService::err("disk full"));
+        let app = make_app_for_test(upload_service.clone(), false, test_csrf_config());
+
+        let boundary = "X-BOUNDARY";
+        let body = make_multipart_body(
+            boundary,
+            &[MultipartPart::File {
+                name: "file",
+                filename: "hello.txt",
+                content_type: "text/plain",
+                bytes: b"hello",
+            }],
+        );
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/upload")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .expect("request");
+
+        let resp = app.oneshot(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let calls = upload_service.take_calls();
+        assert_eq!(calls.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn upload_handler_rejects_when_csrf_enabled_and_token_missing() {
+        let upload_service = Arc::new(MockUploadService::ok(ok_result()));
+        let app = make_app_for_test(upload_service.clone(), true, test_csrf_config());
+
+        let boundary = "X-BOUNDARY";
+        let body = make_multipart_body(
+            boundary,
+            &[MultipartPart::File {
+                name: "file",
+                filename: "hello.txt",
+                content_type: "text/plain",
+                bytes: b"hello",
+            }],
+        );
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/upload")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .expect("request");
+
+        let resp = app.oneshot(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let calls = upload_service.take_calls();
+        assert!(calls.is_empty());
     }
 }

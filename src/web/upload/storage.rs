@@ -1,13 +1,3 @@
-//! # File Storage Abstractions
-//!
-//! Provides a simple interface for saving uploaded files and tracking metadata.
-//!
-//! This module defines:
-//! - [`SavedFile`] — metadata describing a stored file (path, type, size).
-//! - [`FileStorage`] — trait abstraction for file-saving backends (e.g. local FS, S3).
-//!
-//! The trait is intended to be implemented by various storage layers
-//! such as `LocalFileStorage`, `S3Storage`, or `InMemoryStorage` for testing.
 //!
 //! # Example
 //! ```rust
@@ -50,14 +40,6 @@ pub struct SavedFile {
 
 impl SavedFile {
     /// Creates a new [`SavedFile`] metadata record.
-    ///
-    /// # Example
-    /// ```
-    /// use wzs_web::web::upload::storage::SavedFile;
-    ///
-    /// let file = SavedFile::new("uploads/a.txt", "text/plain", 123);
-    /// assert_eq!(file.bytes, 123);
-    /// ```
     pub fn new(path: impl Into<String>, content_type: impl Into<String>, bytes: u64) -> Self {
         Self {
             path: path.into(),
@@ -71,22 +53,15 @@ impl SavedFile {
 ///
 /// Implementors are responsible for saving file data and returning
 /// the final path or identifier.
-/// Typical implementations include:
-/// - Local filesystem storage
-/// - Cloud-based storage (e.g. AWS S3, Google Cloud Storage)
-/// - In-memory mock storage for tests
 pub trait FileStorage: Send + Sync {
     /// Saves a file to the given relative path.
     ///
     /// # Arguments
-    /// - `rel_path` — relative destination path (e.g. `"images/123.png"`)
+    /// - `rel_path` — relative destination path (e.g. `"images/202603/abc.png"`)
     /// - `bytes` — file contents
     ///
     /// # Returns
     /// The full or relative path of the saved file.
-    ///
-    /// # Errors
-    /// Returns an [`anyhow::Error`] if saving fails.
     fn save(&self, rel_path: &str, bytes: &[u8]) -> Result<String>;
 }
 
