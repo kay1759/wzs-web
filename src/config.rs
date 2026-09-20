@@ -1,4 +1,5 @@
 pub mod app;
+pub mod auth;
 pub mod csrf;
 pub mod db;
 pub mod env;
