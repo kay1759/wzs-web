@@ -1,8 +1,8 @@
 //! # Application Configuration Loader
 //!
 //! Provides a unified configuration loader for application settings,
-//! including database, HTTP, CORS, CSRF, image, upload, mail, and
-//! application-specific environment values.
+//! including authentication, database, HTTP, CORS, CSRF, image, upload,
+//! mail, and application-specific environment values.
 //!
 //! The process environment is captured into [`EnvConfig`] once during
 //! application startup. Typed configuration structures are then built from
@@ -31,7 +31,7 @@
 //! | `APP_ENV` | Current environment | `"development"` |
 //! | `DOTENV_FILE` | Optional custom dotenv file | *none* |
 //! | `DATABASE_URL` | Database connection URL | *none* |
-//! | `JWT_SECRET` | Secret used to sign JWTs | `""` |
+//! | `JWT_SECRET` | Secret used to sign JWTs | authentication disabled |
 //! | `HTML_PATH` | Path to HTML template file | `""` |
 //! | `HTTP_MAX_BODY_BYTES` | Maximum request body size in bytes | derived from MB |
 //! | `HTTP_MAX_BODY_MB` | Maximum request body size in MiB | `5` |
@@ -71,6 +71,7 @@
 use std::env;
 
 use crate::config::{
+    auth::AuthConfig,
     csrf::CsrfConfig,
     db::DbConfig,
     env::EnvConfig,
@@ -107,6 +108,12 @@ pub struct AppConfig {
     /// ```
     pub env: EnvConfig,
 
+    /// Authentication configuration.
+    ///
+    /// JWT authentication is disabled when `JWT_SECRET` is missing,
+    /// empty, or whitespace-only.
+    pub auth: AuthConfig,
+
     /// Database configuration.
     pub db: DbConfig,
 
@@ -130,14 +137,6 @@ pub struct AppConfig {
 
     /// Whether the GraphiQL IDE is enabled.
     pub enable_graphiql: bool,
-
-    /// JWT signing secret.
-    ///
-    /// This remains an empty string when `JWT_SECRET` is not configured.
-    ///
-    /// Authentication configuration will be separated into its own typed
-    /// configuration in a later refactoring step.
-    pub jwt_secret: String,
 
     /// Path to the HTML template file.
     ///
@@ -211,6 +210,7 @@ impl AppConfig {
     /// );
     /// ```
     pub fn from_env_config(env: EnvConfig) -> Self {
+        let auth = AuthConfig::from_env_config(&env);
         let db = DbConfig::from_env_config(&env);
         let http = HttpConfig::from_env_config(&env);
         let csrf = CsrfConfig::from_env_config(&env);
@@ -233,12 +233,11 @@ impl AppConfig {
 
         let enable_graphiql = read_flag(&env, "GRAPHIQL", false);
 
-        let jwt_secret = env.get_string("JWT_SECRET").unwrap_or_default();
-
         let html_path = env.get_string("HTML_PATH").unwrap_or_default();
 
         Self {
             env,
+            auth,
             db,
             http,
             csrf,
@@ -247,7 +246,6 @@ impl AppConfig {
             upload,
             mail,
             enable_graphiql,
-            jwt_secret,
             html_path,
         }
     }
@@ -385,7 +383,9 @@ mod tests {
 
         assert_eq!(cfg.http.max_body_bytes, 5 * 1024 * 1024);
 
-        assert_eq!(cfg.jwt_secret, "");
+        assert!(!cfg.auth.is_enabled());
+        assert_eq!(cfg.auth.jwt_secret(), None);
+
         assert_eq!(cfg.html_path, "");
 
         assert!(cfg.mail.is_none());
@@ -432,7 +432,9 @@ mod tests {
 
         assert_eq!(cfg.http.max_body_bytes, 3 * 1024 * 1024);
 
-        assert_eq!(cfg.jwt_secret, "test-secret");
+        assert!(cfg.auth.is_enabled());
+        assert_eq!(cfg.auth.jwt_secret(), Some("test-secret"));
+
         assert_eq!(cfg.html_path, "/tmp/index.html");
     }
 
@@ -462,19 +464,38 @@ mod tests {
     }
 
     #[test]
-    fn jwt_secret_defaults_to_empty() {
+    fn authentication_is_disabled_when_jwt_secret_is_missing() {
         let cfg = AppConfig::from_env_config(EnvConfig::default());
 
-        assert_eq!(cfg.jwt_secret, "");
+        assert!(!cfg.auth.is_enabled());
+        assert_eq!(cfg.auth.jwt_secret(), None);
     }
 
     #[test]
-    fn jwt_secret_is_loaded_from_env_config() {
+    fn authentication_is_disabled_when_jwt_secret_is_empty() {
+        for secret in ["", " ", "   ", "\t", "\n"] {
+            let env = EnvConfig::from_iter([("JWT_SECRET", secret)]);
+
+            let cfg = AppConfig::from_env_config(env);
+
+            assert!(
+                !cfg.auth.is_enabled(),
+                "Expected authentication to be disabled for {secret:?}"
+            );
+
+            assert_eq!(cfg.auth.jwt_secret(), None);
+        }
+    }
+
+    #[test]
+    fn authentication_is_enabled_when_jwt_secret_is_present() {
         let env = EnvConfig::from_iter([("JWT_SECRET", "test-secret")]);
 
         let cfg = AppConfig::from_env_config(env);
 
-        assert_eq!(cfg.jwt_secret, "test-secret");
+        assert!(cfg.auth.is_enabled());
+
+        assert_eq!(cfg.auth.jwt_secret(), Some("test-secret"));
     }
 
     #[test]
