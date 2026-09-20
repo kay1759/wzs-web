@@ -1,59 +1,79 @@
 //! # Application Configuration Loader
 //!
 //! Provides a unified configuration loader for application settings,
-//! including **database**, **HTTP**, **CORS**, **CSRF**, and **feature toggles**.
+//! including database, HTTP, CORS, CSRF, image, upload, mail, and
+//! application-specific environment values.
 //!
-//! Automatically loads `.env` files for non-production environments.
-//! It checks for a custom `DOTENV_FILE` path first, then falls back to
-//! `.env.{APP_ENV}` or `.env`.
+//! The process environment is captured into [`EnvConfig`] once during
+//! application startup. Typed configuration structures are then built from
+//! that same immutable environment snapshot.
 //!
-//! This configuration is typically initialized once at application startup
-//! and shared throughout the entire system via dependency injection.
+//! For non-production environments, `.env` files are loaded before the
+//! snapshot is created.
+//!
+//! # Environment Loading
+//!
+//! [`AppConfig::from_env`] performs the following steps:
+//!
+//! 1. Reads `APP_ENV` from the process environment.
+//! 2. Loads an appropriate `.env` file when not in production.
+//! 3. Captures all environment variables into [`EnvConfig`].
+//! 4. Builds [`AppConfig`] and its typed sub-configurations from that
+//!    snapshot.
+//!
+//! This allows application-specific variables that are not known to
+//! `wzs-web` to remain available through [`AppConfig::env`].
 //!
 //! # Environment Variables
+//!
 //! | Variable | Description | Default |
-//! |-----------|-------------|----------|
-//! | `APP_ENV` | Current environment (`development`, `production`, etc.) | `"development"` |
-//! | `DOTENV_FILE` | Optional path to a custom dotenv file | *none* |
-//! | `DATABASE_URL` | MySQL connection URL | *required* |
+//! |-----------|-------------|---------|
+//! | `APP_ENV` | Current environment | `"development"` |
+//! | `DOTENV_FILE` | Optional custom dotenv file | *none* |
+//! | `DATABASE_URL` | Database connection URL | *none* |
 //! | `JWT_SECRET` | Secret used to sign JWTs | `""` |
 //! | `HTML_PATH` | Path to HTML template file | `""` |
-//! | `HTTP_MAX_BODY_BYTES` | Maximum request body size (bytes) | derived from `HTTP_MAX_BODY_MB` |
-//! | `HTTP_MAX_BODY_MB` | Max body size in megabytes (if bytes not set) | `5` |
-//! | `CSRF_SECRET` | CSRF signing secret (auto-generated if missing) | random |
-//! | `GRAPHIQL` | Enable GraphiQL IDE (development only) | `false` |
-//! | `CORS_ORIGINS` | Allowed origins for CORS | `""` |
-//! | `CORS_CREDENTIALS` | Allow credentials in CORS requests | `false` |
-//! | `UPLOAD_ROOT` | Root directory for uploads | `"./var/uploads"` |
-//! | `UPLOAD_IMAGE_DIR` | Subdirectory for image uploads | `"images"` |
-//! | `UPLOAD_FILE_DIR` | Subdirectory for other file uploads | `"files"` |
-//! | `IMAGE_MAX_WIDTH` | Max allowed image width (px) | `1280` |
-//! | `IMAGE_MAX_HEIGHT` | Max allowed image height (px) | `1280` |
+//! | `HTTP_MAX_BODY_BYTES` | Maximum request body size in bytes | derived from MB |
+//! | `HTTP_MAX_BODY_MB` | Maximum request body size in MiB | `5` |
+//! | `CSRF_SECRET` | CSRF signing secret | random if missing |
+//! | `GRAPHIQL` | Enable GraphiQL | `false` |
+//! | `CORS_ENABLED` | Enable CORS | `false` |
+//! | `CORS_ORIGINS` | Allowed CORS origins | `""` |
+//! | `CORS_CREDENTIALS` | Allow CORS credentials | `false` |
+//! | `UPLOAD_ROOT` | Root upload directory | `"./var/uploads"` |
+//! | `UPLOAD_IMAGE_DIR` | Image upload subdirectory | `"images"` |
+//! | `UPLOAD_FILE_DIR` | File upload subdirectory | `"files"` |
+//! | `IMAGE_MAX_WIDTH` | Maximum image width | `1280` |
+//! | `IMAGE_MAX_HEIGHT` | Maximum image height | `1280` |
 //! | `SMTP_HOST` | SMTP server hostname | *none* |
 //! | `SMTP_PORT` | SMTP server port | *none* |
-//! | `SMTP_USERNAME` | SMTP authentication username | *none* |
-//! | `SMTP_PASSWORD` | SMTP authentication password | *none* |
+//! | `SMTP_USERNAME` | SMTP username | *none* |
+//! | `SMTP_PASSWORD` | SMTP password | *none* |
 //! | `SMTP_FROM_EMAIL` | Sender email address | *none* |
 //! | `SMTP_FROM_NAME` | Sender display name | `"Notifier"` |
-//! | `NOTIFY_TO_EMAIL` | Notification recipients (comma-separated) | empty |
+//! | `NOTIFY_TO_EMAIL` | Notification recipients | empty |
 //!
 //! # Example
+//!
 //! ```rust,no_run
 //! use wzs_web::config::app::AppConfig;
 //!
 //! let cfg = AppConfig::from_env();
-//! if cfg.is_csrf_enabled() {
-//!     println!("CSRF protection is active");
-//! }
+//!
+//! let bcrypt_cost = cfg
+//!     .env
+//!     .get_u32("BCRYPT_COST")
+//!     .unwrap_or(12);
+//!
+//! println!("bcrypt cost: {bcrypt_cost}");
 //! ```
 
 use std::env;
-use std::path::PathBuf;
 
 use crate::config::{
     csrf::CsrfConfig,
     db::DbConfig,
-    env::*,
+    env::EnvConfig,
     image::ImageConfig,
     mail::MailConfig,
     upload::UploadConfig,
@@ -62,137 +82,169 @@ use crate::config::{
 
 /// Top-level application configuration.
 ///
-/// This struct aggregates all configuration domains:
-/// - **Database connection**
-/// - **HTTP server and request limits**
-/// - **CSRF & CORS security**
-/// - **Image processing & upload directories**
-/// - **Feature flags (e.g. GraphiQL enablement)**
+/// `AppConfig` contains both:
+///
+/// - typed configuration used directly by `wzs-web`, and
+/// - the complete [`EnvConfig`] snapshot used to construct it.
+///
+/// Keeping the environment snapshot makes application-specific variables
+/// available without requiring `wzs-web` to know about every possible
+/// application setting.
 #[derive(Clone, Debug)]
 pub struct AppConfig {
+    /// Snapshot of all environment variables captured at startup.
+    ///
+    /// This can also be used for application-specific configuration:
+    ///
+    /// ```rust,no_run
+    /// # use wzs_web::config::app::AppConfig;
+    /// let cfg = AppConfig::from_env();
+    ///
+    /// let bcrypt_cost = cfg
+    ///     .env
+    ///     .get_u32("BCRYPT_COST")
+    ///     .unwrap_or(12);
+    /// ```
+    pub env: EnvConfig,
+
     /// Database configuration.
     pub db: DbConfig,
+
     /// HTTP server configuration.
     pub http: HttpConfig,
-    /// CSRF-related secret and cookie flags.
+
+    /// CSRF configuration.
     pub csrf: CsrfConfig,
+
     /// Cross-Origin Resource Sharing configuration.
     pub cors: CorsConfig,
-    /// Image dimension constraints.
+
+    /// Image processing configuration.
     pub image: ImageConfig,
-    /// File and image upload directory configuration.
+
+    /// Upload directory configuration.
     pub upload: UploadConfig,
-    /// Optional mail (SMTP) configuration.
+
+    /// Optional SMTP configuration.
     pub mail: Option<MailConfig>,
-    /// Whether the GraphiQL IDE is enabled (typically only in development).
+
+    /// Whether the GraphiQL IDE is enabled.
     pub enable_graphiql: bool,
+
     /// JWT signing secret.
     ///
-    /// - Empty string if `JWT_SECRET` is not set.
-    /// - Validation is responsibility of the caller.
+    /// This remains an empty string when `JWT_SECRET` is not configured.
+    ///
+    /// Authentication configuration will be separated into its own typed
+    /// configuration in a later refactoring step.
     pub jwt_secret: String,
+
     /// Path to the HTML template file.
     ///
-    /// - Empty string if `HTML_PATH` is not set.
-    /// - File loading is responsibility of the caller.
+    /// Empty when `HTML_PATH` is not configured.
     pub html_path: String,
 }
 
 impl AppConfig {
-    /// Loads application configuration from environment variables and optional `.env` files.
+    /// Loads application configuration from the process environment.
     ///
-    /// ## Behavior
-    /// - Reads `APP_ENV` (defaults to `"development"`).
-    /// - If not in production, attempts to load:
-    ///   1. `DOTENV_FILE` (if defined), or
-    ///   2. `.env.{APP_ENV}`, or
-    ///   3. fallback to `.env`.
-    /// - Parses known environment variables into structured configuration.
-    /// - Falls back to safe defaults for optional parameters.
+    /// In non-production environments, this method first attempts to load a
+    /// dotenv file. The complete process environment is then captured into an
+    /// [`EnvConfig`] snapshot and passed to [`AppConfig::from_env_config`].
+    ///
+    /// # Dotenv loading order
+    ///
+    /// When `APP_ENV` is not `"production"`:
+    ///
+    /// 1. `DOTENV_FILE`, when explicitly configured;
+    /// 2. `.env.{APP_ENV}`;
+    /// 3. `.env`.
     ///
     /// # Example
+    ///
     /// ```rust,no_run
     /// use wzs_web::config::app::AppConfig;
     ///
     /// let cfg = AppConfig::from_env();
-    /// assert!(cfg.db.is_valid());
+    ///
     /// assert!(cfg.http.max_body_bytes > 0);
     /// ```
     pub fn from_env() -> Self {
-        // Determine environment (e.g., development, production)
-        let app_env = env::var("APP_ENV").unwrap_or_else(|_| "development".into());
+        load_dotenv();
 
-        // Automatically load .env file for non-production environments
-        if app_env != "production" {
-            if let Ok(path) = env::var("DOTENV_FILE") {
-                let _ = dotenvy::from_filename(path);
-            } else {
-                let candidate = format!(".env.{}", app_env);
-                dotenvy::from_filename(&candidate)
-                    .or_else(|_| dotenvy::dotenv())
-                    .ok();
-            }
-        }
+        let env = EnvConfig::from_env();
 
-        // HTTP configuration
-        let http_max_body_bytes = env::var("HTTP_MAX_BODY_BYTES")
-            .ok()
-            .and_then(|s| s.trim().parse::<usize>().ok())
-            .unwrap_or_else(|| (read_u32("HTTP_MAX_BODY_MB", 5) as usize) * 1024 * 1024);
+        Self::from_env_config(env)
+    }
 
-        // CORS
-        let cors_enabled = read_flag("CORS_ENABLED", false);
-        let cors_env = env::var("CORS_ORIGINS").unwrap_or_default();
-        let cors_credentials = read_flag("CORS_CREDENTIALS", false);
+    /// Builds application configuration from an [`EnvConfig`] snapshot.
+    ///
+    /// This constructor does not access or modify the process environment.
+    /// It is therefore suitable for deterministic tests and for applications
+    /// that construct their configuration programmatically.
+    ///
+    /// Unknown or application-specific environment values remain available
+    /// through [`AppConfig::env`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use wzs_web::config::app::AppConfig;
+    /// use wzs_web::config::env::EnvConfig;
+    ///
+    /// let env = EnvConfig::from_iter([
+    ///     ("DATABASE_URL", "mysql://localhost/example"),
+    ///     ("BCRYPT_COST", "4"),
+    ///     ("PUBLIC_WEB_BASE_URL", "http://localhost:5173"),
+    /// ]);
+    ///
+    /// let cfg = AppConfig::from_env_config(env);
+    ///
+    /// assert_eq!(
+    ///     cfg.env.get_u32("BCRYPT_COST"),
+    ///     Some(4),
+    /// );
+    ///
+    /// assert_eq!(
+    ///     cfg.env.get("PUBLIC_WEB_BASE_URL"),
+    ///     Some("http://localhost:5173"),
+    /// );
+    /// ```
+    pub fn from_env_config(env: EnvConfig) -> Self {
+        let db = DbConfig::from_env_config(&env);
+        let http = HttpConfig::from_env_config(&env);
+        let csrf = CsrfConfig::from_env_config(&env);
+        let cors = CorsConfig::from_env_config(&env);
+        let image = ImageConfig::from_env_config(&env);
+        let upload = UploadConfig::from_env_config(&env);
 
-        // --- Image configuration ---
-        let max_w = read_u32("IMAGE_MAX_WIDTH", 1280);
-        let max_h = read_u32("IMAGE_MAX_HEIGHT", 1280);
-
-        // --- Upload configuration ---
-        let upload_root: PathBuf = env::var("UPLOAD_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| "./var/uploads".into());
-        let image_dir = env::var("UPLOAD_IMAGE_DIR").unwrap_or_else(|_| "images".into());
-        let file_dir = env::var("UPLOAD_FILE_DIR").unwrap_or_else(|_| "files".into());
-
-        // --- Mail configuration (optional) ---
+        // Mail is considered configured only when SMTP_HOST is present.
         //
-        // Mail configuration is enabled only when SMTP_HOST is present.
-        // If any required SMTP variables are missing or invalid,
-        // MailConfig::from_env() returns an error and mail config is disabled.
-        let mail = if env::var("SMTP_HOST").is_ok() {
-            MailConfig::from_env().ok()
+        // This preserves the previous AppConfig behavior:
+        //
+        // - no SMTP_HOST -> mail is disabled
+        // - SMTP_HOST + valid required settings -> Some(MailConfig)
+        // - SMTP_HOST + incomplete/invalid settings -> mail is disabled
+        let mail = if env.contains_key("SMTP_HOST") {
+            MailConfig::from_env_config(&env).ok()
         } else {
             None
         };
 
-        let enable_graphiql = read_flag("GRAPHIQL", false);
+        let enable_graphiql = read_flag(&env, "GRAPHIQL", false);
 
-        // JWT & HTML
-        let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| "".to_string());
-        let html_path = env::var("HTML_PATH").unwrap_or_else(|_| "".to_string());
+        let jwt_secret = env.get_string("JWT_SECRET").unwrap_or_default();
 
-        AppConfig {
-            db: DbConfig::from_env(),
-            http: HttpConfig {
-                max_body_bytes: http_max_body_bytes,
-            },
-            csrf: CsrfConfig::from_env(),
-            cors: CorsConfig {
-                enabled: cors_enabled,
-                env: cors_env,
-                credentials: cors_credentials,
-            },
-            image: ImageConfig {
-                max_width: max_w,
-                max_height: max_h,
-            },
-            upload: UploadConfig {
-                root: upload_root,
-                image_dir,
-                file_dir,
-            },
+        let html_path = env.get_string("HTML_PATH").unwrap_or_default();
+
+        Self {
+            env,
+            db,
+            http,
+            csrf,
+            cors,
+            image,
+            upload,
             mail,
             enable_graphiql,
             jwt_secret,
@@ -202,341 +254,348 @@ impl AppConfig {
 
     /// Returns `true` if CSRF protection is enabled.
     ///
-    /// This is automatically determined by the presence of `CSRF_SECRET`.
+    /// This method currently delegates to [`CsrfConfig::is_enabled`].
+    ///
+    /// The CSRF enabled-state representation will be revisited separately
+    /// when authentication and API-specific configuration are refactored.
     pub fn is_csrf_enabled(&self) -> bool {
         self.csrf.is_enabled()
     }
 }
 
+/// Loads an appropriate dotenv file for the current environment.
+///
+/// `APP_ENV` and `DOTENV_FILE` must be read before the environment snapshot is
+/// created because loading a dotenv file modifies the process environment.
+fn load_dotenv() {
+    let app_env = env::var("APP_ENV").unwrap_or_else(|_| "development".into());
+
+    if app_env == "production" {
+        return;
+    }
+
+    if let Ok(path) = env::var("DOTENV_FILE") {
+        let _ = dotenvy::from_filename(path);
+        return;
+    }
+
+    let candidate = format!(".env.{app_env}");
+
+    dotenvy::from_filename(&candidate)
+        .or_else(|_| dotenvy::dotenv())
+        .ok();
+}
+
+/// Reads a boolean flag while preserving the existing configuration behavior.
+///
+/// Missing values return `default`. When a value is present, only recognized
+/// truthy values evaluate to `true`; all other supplied values evaluate to
+/// `false`.
+fn read_flag(env: &EnvConfig, key: &str, default: bool) -> bool {
+    match env.get(key) {
+        Some(value) => is_truthy(value),
+        None => default,
+    }
+}
+
+/// Returns whether a string represents a truthy configuration value.
+fn is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
-    use temp_env;
 
     #[test]
-    fn from_env_includes_db_config() {
-        temp_env::with_vars(
-            vec![("DATABASE_URL", Some("mysql://root:pass@localhost/db"))],
-            || {
-                let cfg = AppConfig::from_env();
-                assert_eq!(
-                    cfg.db.url.as_deref(),
-                    Some("mysql://root:pass@localhost/db")
-                );
-            },
+    fn from_env_config_includes_db_config() {
+        let env = EnvConfig::from_iter([("DATABASE_URL", "mysql://root:pass@localhost/db")]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert_eq!(
+            cfg.db.url.as_deref(),
+            Some("mysql://root:pass@localhost/db")
         );
     }
 
     #[test]
-    fn is_csrf_enabled_returns_true_when_secret_is_present() {
-        temp_env::with_vars(vec![("CSRF_SECRET", Some("super-secret-key"))], || {
-            let cfg = AppConfig::from_env();
-            assert!(
-                cfg.is_csrf_enabled(),
-                "Expected CSRF to be enabled when CSRF_SECRET is set"
-            );
-        });
-    }
+    fn from_env_config_preserves_unknown_variables() {
+        let env = EnvConfig::from_iter([
+            ("DATABASE_URL", "mysql://localhost/db"),
+            ("BCRYPT_COST", "4"),
+            ("PUBLIC_WEB_BASE_URL", "http://localhost:5173"),
+            ("RESERVATION_MAX_DAYS", "60"),
+        ]);
 
-    #[test]
-    fn is_csrf_enabled_returns_false_when_secret_is_missing() {
-        temp_env::with_vars(vec![("CSRF_SECRET", None::<&str>)], || {
-            let cfg = AppConfig::from_env();
-            assert!(
-                !cfg.is_csrf_enabled(),
-                "Expected CSRF to be disabled when CSRF_SECRET is missing"
-            );
-        });
-    }
+        let cfg = AppConfig::from_env_config(env);
 
-    #[test]
-    fn cors_enabled_is_loaded_from_env() {
-        temp_env::with_vars(
-            vec![
-                ("APP_ENV", Some("production")),
-                ("CORS_ENABLED", Some("true")),
-            ],
-            || {
-                let cfg = AppConfig::from_env();
-                assert!(cfg.cors.enabled);
-            },
+        assert_eq!(cfg.env.get_u32("BCRYPT_COST"), Some(4));
+
+        assert_eq!(
+            cfg.env.get("PUBLIC_WEB_BASE_URL"),
+            Some("http://localhost:5173")
         );
+
+        assert_eq!(cfg.env.get_u32("RESERVATION_MAX_DAYS"), Some(60));
+    }
+
+    #[test]
+    fn cors_enabled_is_loaded_from_env_config() {
+        let env = EnvConfig::from_iter([("CORS_ENABLED", "true")]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert!(cfg.cors.enabled);
     }
 
     #[test]
     fn cors_enabled_defaults_to_false() {
-        temp_env::with_vars(
-            vec![
-                ("APP_ENV", Some("production")),
-                ("CORS_ENABLED", None::<&str>),
-            ],
-            || {
-                let cfg = AppConfig::from_env();
-                assert!(!cfg.cors.enabled);
-            },
-        );
+        let env = EnvConfig::default();
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert!(!cfg.cors.enabled);
     }
 
     #[test]
-    fn from_env_uses_defaults_when_missing_optional() {
-        let vars = vec![
-            ("APP_ENV", Some("production")),
-            ("GRAPHIQL", None),
-            ("CORS_ENABLED", None),
-            ("CORS_ORIGINS", None),
-            ("CORS_CREDENTIALS", None),
-            ("IMAGE_MAX_WIDTH", None),
-            ("IMAGE_MAX_HEIGHT", None),
-            ("HTTP_MAX_BODY_BYTES", None),
-            ("HTTP_MAX_BODY_MB", None),
-            ("UPLOAD_ROOT", None),
-            ("UPLOAD_IMAGE_DIR", None),
-            ("UPLOAD_FILE_DIR", None),
-        ];
+    fn from_env_config_uses_defaults_when_optional_values_are_missing() {
+        let env = EnvConfig::default();
 
-        temp_env::with_vars(vars, || {
-            let cfg = AppConfig::from_env();
+        let cfg = AppConfig::from_env_config(env);
 
-            assert!(!cfg.enable_graphiql);
+        assert!(!cfg.enable_graphiql);
 
-            assert_eq!(cfg.image.max_width, 1280);
-            assert_eq!(cfg.image.max_height, 1280);
+        assert_eq!(cfg.image.max_width, 1280);
+        assert_eq!(cfg.image.max_height, 1280);
 
-            assert_eq!(cfg.upload.root, PathBuf::from("./var/uploads"));
-            assert_eq!(cfg.upload.image_dir, "images");
-            assert_eq!(cfg.upload.file_dir, "files");
+        assert_eq!(cfg.upload.root, PathBuf::from("./var/uploads"));
 
-            assert!(!cfg.cors.enabled);
-            assert_eq!(cfg.cors.env, "");
-            assert_eq!(cfg.cors.credentials, false);
+        assert_eq!(cfg.upload.image_dir, "images");
+        assert_eq!(cfg.upload.file_dir, "files");
 
-            assert_eq!(cfg.http.max_body_bytes, 5 * 1024 * 1024);
-        });
+        assert!(!cfg.cors.enabled);
+        assert_eq!(cfg.cors.env, "");
+        assert!(!cfg.cors.credentials);
+
+        assert_eq!(cfg.http.max_body_bytes, 5 * 1024 * 1024);
+
+        assert_eq!(cfg.jwt_secret, "");
+        assert_eq!(cfg.html_path, "");
+
+        assert!(cfg.mail.is_none());
     }
 
     #[test]
-    fn from_env_overrides_all_fields() {
-        let vars = vec![
-            ("APP_ENV", Some("production")),
-            ("GRAPHIQL", Some("true")),
-            ("UPLOAD_ROOT", Some("/data/uploads")),
-            ("UPLOAD_IMAGE_DIR", Some("pics")),
-            ("UPLOAD_FILE_DIR", Some("docs")),
-            ("CORS_ENABLED", Some("true")),
+    fn from_env_config_overrides_all_fields() {
+        let env = EnvConfig::from_iter([
+            ("GRAPHIQL", "true"),
+            ("UPLOAD_ROOT", "/data/uploads"),
+            ("UPLOAD_IMAGE_DIR", "pics"),
+            ("UPLOAD_FILE_DIR", "docs"),
+            ("CORS_ENABLED", "true"),
             (
                 "CORS_ORIGINS",
-                Some("https://a.example.com,https://b.example.com"),
+                "https://a.example.com,https://b.example.com",
             ),
-            ("CORS_CREDENTIALS", Some("true")),
-            ("IMAGE_MAX_WIDTH", Some("2048")),
-            ("IMAGE_MAX_HEIGHT", Some("1536")),
-            ("HTTP_MAX_BODY_BYTES", Some("3145728")),
-            ("HTTP_MAX_BODY_MB", Some("99")),
-        ];
+            ("CORS_CREDENTIALS", "true"),
+            ("IMAGE_MAX_WIDTH", "2048"),
+            ("IMAGE_MAX_HEIGHT", "1536"),
+            ("HTTP_MAX_BODY_BYTES", "3145728"),
+            ("HTTP_MAX_BODY_MB", "99"),
+            ("JWT_SECRET", "test-secret"),
+            ("HTML_PATH", "/tmp/index.html"),
+        ]);
 
-        temp_env::with_vars(vars, || {
-            let cfg = AppConfig::from_env();
+        let cfg = AppConfig::from_env_config(env);
 
-            assert!(cfg.enable_graphiql);
+        assert!(cfg.enable_graphiql);
 
-            assert_eq!(cfg.upload.root, PathBuf::from("/data/uploads"));
-            assert_eq!(cfg.upload.image_dir, "pics");
-            assert_eq!(cfg.upload.file_dir, "docs");
+        assert_eq!(cfg.upload.root, PathBuf::from("/data/uploads"));
 
-            assert!(cfg.cors.enabled);
-            assert_eq!(cfg.cors.env, "https://a.example.com,https://b.example.com");
-            assert!(cfg.cors.credentials);
+        assert_eq!(cfg.upload.image_dir, "pics");
+        assert_eq!(cfg.upload.file_dir, "docs");
 
-            assert_eq!(cfg.image.max_width, 2048);
-            assert_eq!(cfg.image.max_height, 1536);
+        assert!(cfg.cors.enabled);
 
-            assert_eq!(cfg.http.max_body_bytes, 3 * 1024 * 1024);
-        });
+        assert_eq!(cfg.cors.env, "https://a.example.com,https://b.example.com");
+
+        assert!(cfg.cors.credentials);
+
+        assert_eq!(cfg.image.max_width, 2048);
+        assert_eq!(cfg.image.max_height, 1536);
+
+        assert_eq!(cfg.http.max_body_bytes, 3 * 1024 * 1024);
+
+        assert_eq!(cfg.jwt_secret, "test-secret");
+        assert_eq!(cfg.html_path, "/tmp/index.html");
     }
 
     #[test]
     fn http_body_size_falls_back_to_mb_when_bytes_absent() {
-        let vars = vec![
-            ("APP_ENV", Some("production")),
-            ("HTTP_MAX_BODY_BYTES", None),
-            ("HTTP_MAX_BODY_MB", Some("7")),
-        ];
+        let env = EnvConfig::from_iter([("HTTP_MAX_BODY_MB", "7")]);
 
-        temp_env::with_vars(vars, || {
-            let cfg = AppConfig::from_env();
-            assert_eq!(cfg.http.max_body_bytes, 7 * 1024 * 1024);
-        });
+        let cfg = AppConfig::from_env_config(env);
+
+        assert_eq!(cfg.http.max_body_bytes, 7 * 1024 * 1024);
     }
 
     #[test]
     fn malformed_numbers_use_defaults_where_applicable() {
-        let vars = vec![
-            ("APP_ENV", Some("production")),
-            ("IMAGE_MAX_WIDTH", Some("NaN")),
-            ("IMAGE_MAX_HEIGHT", Some("oops")),
-            ("HTTP_MAX_BODY_BYTES", None),
-            ("HTTP_MAX_BODY_MB", Some("not-a-number")),
-        ];
+        let env = EnvConfig::from_iter([
+            ("IMAGE_MAX_WIDTH", "NaN"),
+            ("IMAGE_MAX_HEIGHT", "oops"),
+            ("HTTP_MAX_BODY_MB", "not-a-number"),
+        ]);
 
-        temp_env::with_vars(vars, || {
-            let cfg = AppConfig::from_env();
-            assert_eq!(cfg.image.max_width, 1280);
-            assert_eq!(cfg.image.max_height, 1280);
-            assert_eq!(cfg.http.max_body_bytes, 5 * 1024 * 1024);
-        });
+        let cfg = AppConfig::from_env_config(env);
+
+        assert_eq!(cfg.image.max_width, 1280);
+        assert_eq!(cfg.image.max_height, 1280);
+
+        assert_eq!(cfg.http.max_body_bytes, 5 * 1024 * 1024);
     }
 
     #[test]
     fn jwt_secret_defaults_to_empty() {
-        temp_env::with_vars(vec![("JWT_SECRET", None::<&str>)], || {
-            let cfg = AppConfig::from_env();
-            assert_eq!(cfg.jwt_secret, "");
-        });
+        let cfg = AppConfig::from_env_config(EnvConfig::default());
+
+        assert_eq!(cfg.jwt_secret, "");
     }
 
     #[test]
-    fn jwt_secret_is_loaded_from_env() {
-        temp_env::with_vars(vec![("JWT_SECRET", Some("test-secret"))], || {
-            let cfg = AppConfig::from_env();
-            assert_eq!(cfg.jwt_secret, "test-secret");
-        });
+    fn jwt_secret_is_loaded_from_env_config() {
+        let env = EnvConfig::from_iter([("JWT_SECRET", "test-secret")]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert_eq!(cfg.jwt_secret, "test-secret");
     }
 
     #[test]
     fn html_path_defaults_to_empty() {
-        temp_env::with_vars(vec![("HTML_PATH", None::<&str>)], || {
-            let cfg = AppConfig::from_env();
-            assert_eq!(cfg.html_path, "");
-        });
+        let cfg = AppConfig::from_env_config(EnvConfig::default());
+
+        assert_eq!(cfg.html_path, "");
     }
 
     #[test]
-    fn html_path_is_loaded_from_env() {
-        temp_env::with_vars(vec![("HTML_PATH", Some("/tmp/index.html"))], || {
-            let cfg = AppConfig::from_env();
-            assert_eq!(cfg.html_path, "/tmp/index.html");
-        });
+    fn html_path_is_loaded_from_env_config() {
+        let env = EnvConfig::from_iter([("HTML_PATH", "/tmp/index.html")]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert_eq!(cfg.html_path, "/tmp/index.html");
     }
 
     #[test]
     fn mail_config_is_none_when_smtp_is_not_configured() {
-        temp_env::with_vars(
-            vec![
-                ("SMTP_HOST", None::<&str>),
-                ("SMTP_PORT", None::<&str>),
-                ("SMTP_USERNAME", None::<&str>),
-                ("SMTP_PASSWORD", None::<&str>),
-                ("SMTP_FROM_EMAIL", None::<&str>),
-                ("NOTIFY_TO_EMAIL", None::<&str>),
-            ],
-            || {
-                let cfg = AppConfig::from_env();
-                assert!(
-                    cfg.mail.is_none(),
-                    "Expected mail config to be None when SMTP is not configured"
-                );
-            },
-        );
+        let cfg = AppConfig::from_env_config(EnvConfig::default());
+
+        assert!(cfg.mail.is_none());
     }
 
     #[test]
     fn mail_config_is_none_when_required_smtp_vars_are_incomplete() {
-        temp_env::with_vars(
-            vec![
-                // SMTP_HOST exists, but others are missing
-                ("SMTP_HOST", Some("smtp.example.com")),
-                ("SMTP_PORT", None::<&str>),
-                ("SMTP_USERNAME", None::<&str>),
-                ("SMTP_PASSWORD", None::<&str>),
-                ("SMTP_FROM_EMAIL", None::<&str>),
-            ],
-            || {
-                let cfg = AppConfig::from_env();
-                assert!(
-                    cfg.mail.is_none(),
-                    "Expected mail config to be None when SMTP vars are incomplete"
-                );
-            },
-        );
+        let env = EnvConfig::from_iter([("SMTP_HOST", "smtp.example.com")]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert!(cfg.mail.is_none());
     }
 
     #[test]
     fn mail_config_is_loaded_when_all_required_smtp_vars_are_present() {
-        temp_env::with_vars(
-            vec![
-                ("SMTP_HOST", Some("smtp.example.com")),
-                ("SMTP_PORT", Some("587")),
-                ("SMTP_USERNAME", Some("user")),
-                ("SMTP_PASSWORD", Some("pass")),
-                ("SMTP_FROM_EMAIL", Some("noreply@example.com")),
-                ("SMTP_FROM_NAME", Some("Notifier")),
-                ("NOTIFY_TO_EMAIL", Some("notify@example.com")),
-            ],
-            || {
-                let cfg = AppConfig::from_env();
-                let mail = cfg.mail.expect("mail config should be present");
+        let env = EnvConfig::from_iter([
+            ("SMTP_HOST", "smtp.example.com"),
+            ("SMTP_PORT", "587"),
+            ("SMTP_USERNAME", "user"),
+            ("SMTP_PASSWORD", "pass"),
+            ("SMTP_FROM_EMAIL", "noreply@example.com"),
+            ("SMTP_FROM_NAME", "Notifier"),
+            ("NOTIFY_TO_EMAIL", "notify@example.com"),
+        ]);
 
-                assert_eq!(mail.host, "smtp.example.com");
-                assert_eq!(mail.port, 587);
-                assert_eq!(mail.username, "user");
-                assert_eq!(mail.password, "pass");
-                assert_eq!(mail.from_email, "noreply@example.com");
-                assert_eq!(mail.from_name, "Notifier");
+        let cfg = AppConfig::from_env_config(env);
 
-                assert_eq!(mail.notify_to, vec!["notify@example.com"]);
-            },
-        );
+        let mail = cfg.mail.expect("mail config should be present");
+
+        assert_eq!(mail.host, "smtp.example.com");
+        assert_eq!(mail.port, 587);
+        assert_eq!(mail.username, "user");
+        assert_eq!(mail.password, "pass");
+
+        assert_eq!(mail.from_email, "noreply@example.com");
+
+        assert_eq!(mail.from_name, "Notifier");
+
+        assert_eq!(mail.notify_to, vec!["notify@example.com"]);
     }
 
     #[test]
     fn mail_config_uses_defaults_for_optional_fields() {
-        temp_env::with_vars(
-            vec![
-                ("SMTP_HOST", Some("smtp.example.com")),
-                ("SMTP_PORT", Some("25")),
-                ("SMTP_USERNAME", Some("user")),
-                ("SMTP_PASSWORD", Some("pass")),
-                ("SMTP_FROM_EMAIL", Some("noreply@example.com")),
-                // Optional values unset
-                ("SMTP_FROM_NAME", None),
-                ("NOTIFY_TO_EMAIL", None),
-            ],
-            || {
-                let cfg = AppConfig::from_env();
-                let mail = cfg.mail.expect("mail config should be present");
+        let env = EnvConfig::from_iter([
+            ("SMTP_HOST", "smtp.example.com"),
+            ("SMTP_PORT", "25"),
+            ("SMTP_USERNAME", "user"),
+            ("SMTP_PASSWORD", "pass"),
+            ("SMTP_FROM_EMAIL", "noreply@example.com"),
+        ]);
 
-                assert_eq!(mail.from_name, "Notifier");
-                assert!(
-                    mail.notify_to.is_empty(),
-                    "Expected notify_to to be empty when NOTIFY_TO_EMAIL is not set"
-                );
-            },
-        );
+        let cfg = AppConfig::from_env_config(env);
+
+        let mail = cfg.mail.expect("mail config should be present");
+
+        assert_eq!(mail.from_name, "Notifier");
+        assert!(mail.notify_to.is_empty());
     }
 
     #[test]
     fn mail_config_supports_multiple_notify_to_addresses() {
-        temp_env::with_vars(
-            vec![
-                ("SMTP_HOST", Some("smtp.example.com")),
-                ("SMTP_PORT", Some("587")),
-                ("SMTP_USERNAME", Some("user")),
-                ("SMTP_PASSWORD", Some("pass")),
-                ("SMTP_FROM_EMAIL", Some("noreply@example.com")),
-                (
-                    "NOTIFY_TO_EMAIL",
-                    Some("notify1@example.com, notify2@example.com"),
-                ),
-            ],
-            || {
-                let cfg = AppConfig::from_env();
-                let mail = cfg.mail.expect("mail config should be present");
+        let env = EnvConfig::from_iter([
+            ("SMTP_HOST", "smtp.example.com"),
+            ("SMTP_PORT", "587"),
+            ("SMTP_USERNAME", "user"),
+            ("SMTP_PASSWORD", "pass"),
+            ("SMTP_FROM_EMAIL", "noreply@example.com"),
+            (
+                "NOTIFY_TO_EMAIL",
+                "notify1@example.com, notify2@example.com",
+            ),
+        ]);
 
-                assert_eq!(
-                    mail.notify_to,
-                    vec!["notify1@example.com", "notify2@example.com"]
-                );
-            },
+        let cfg = AppConfig::from_env_config(env);
+
+        let mail = cfg.mail.expect("mail config should be present");
+
+        assert_eq!(
+            mail.notify_to,
+            vec!["notify1@example.com", "notify2@example.com",]
         );
+    }
+
+    #[test]
+    fn graphiql_accepts_truthy_values() {
+        for value in ["1", "true", "TRUE", "yes", "on"] {
+            let env = EnvConfig::from_iter([("GRAPHIQL", value)]);
+
+            let cfg = AppConfig::from_env_config(env);
+
+            assert!(cfg.enable_graphiql, "Expected {value:?} to enable GraphiQL");
+        }
+    }
+
+    #[test]
+    fn graphiql_defaults_to_false_for_invalid_value() {
+        let env = EnvConfig::from_iter([("GRAPHIQL", "invalid")]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert!(!cfg.enable_graphiql);
     }
 }
