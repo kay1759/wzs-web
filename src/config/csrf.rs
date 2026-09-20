@@ -49,8 +49,6 @@
 //! assert!(cfg.cookie_http_only);
 //! ```
 
-use std::env as std_env;
-
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
@@ -142,8 +140,8 @@ impl CsrfConfig {
         F: Fn(&str) -> Option<String>,
     {
         let secret = match get("CSRF_SECRET") {
-            Some(value) => derive_secret_from_string(&value),
-            None => random_secret(),
+            Some(value) if !value.trim().is_empty() => derive_secret_from_string(&value),
+            _ => random_secret(),
         };
 
         let cookie_secure = get("CSRF_COOKIE_SECURE")
@@ -161,18 +159,6 @@ impl CsrfConfig {
             cookie_secure,
             cookie_http_only,
         }
-    }
-
-    /// Returns `true` if CSRF protection should be active.
-    ///
-    /// This method currently preserves the existing behavior and checks
-    /// whether `CSRF_SECRET` exists in the current process environment.
-    ///
-    /// Note that this means the result is not derived from an [`EnvConfig`]
-    /// snapshot. This behavior is retained temporarily for compatibility and
-    /// can be revisited when the top-level configuration model is redesigned.
-    pub fn is_enabled(&self) -> bool {
-        std_env::var("CSRF_SECRET").is_ok()
     }
 }
 
@@ -241,7 +227,6 @@ pub fn random_secret() -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temp_env;
 
     #[test]
     fn from_env_config_uses_defaults_when_missing() {
@@ -422,20 +407,17 @@ mod tests {
     }
 
     #[test]
-    fn is_enabled_returns_true_when_secret_is_set() {
-        temp_env::with_vars(vec![("CSRF_SECRET", Some("my-top-secret"))], || {
-            let cfg = CsrfConfig::from_env();
+    fn from_env_config_generates_random_secret_when_secret_is_empty() {
+        for value in ["", " ", "   ", "\t", "\n"] {
+            let env = EnvConfig::from_iter([("CSRF_SECRET", value)]);
 
-            assert!(cfg.is_enabled(), "Expected CSRF to be enabled");
-        });
-    }
+            let first = CsrfConfig::from_env_config(&env);
+            let second = CsrfConfig::from_env_config(&env);
 
-    #[test]
-    fn is_enabled_returns_false_when_secret_missing() {
-        temp_env::with_vars(vec![("CSRF_SECRET", None::<&str>)], || {
-            let cfg = CsrfConfig::from_env();
-
-            assert!(!cfg.is_enabled(), "Expected CSRF to be disabled");
-        });
+            assert_ne!(
+                first.secret, second.secret,
+                "Expected random secrets for {value:?}"
+            );
+        }
     }
 }

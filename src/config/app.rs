@@ -254,12 +254,12 @@ impl AppConfig {
 
     /// Returns `true` if CSRF protection is enabled.
     ///
-    /// This method currently delegates to [`CsrfConfig::is_enabled`].
-    ///
-    /// The CSRF enabled-state representation will be revisited separately
-    /// when authentication and API-specific configuration are refactored.
+    /// CSRF protection is enabled only when `CSRF_SECRET` exists
+    /// and contains a non-empty value after trimming whitespace.
     pub fn is_csrf_enabled(&self) -> bool {
-        self.csrf.is_enabled()
+        self.env
+            .get("CSRF_SECRET")
+            .is_some_and(|value| !value.trim().is_empty())
     }
 }
 
@@ -597,5 +597,35 @@ mod tests {
         let cfg = AppConfig::from_env_config(env);
 
         assert!(!cfg.enable_graphiql);
+    }
+
+    #[test]
+    fn csrf_is_enabled_when_secret_is_present() {
+        let env = EnvConfig::from_iter([("CSRF_SECRET", "super-secret-key")]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert!(cfg.is_csrf_enabled());
+    }
+
+    #[test]
+    fn csrf_is_disabled_when_secret_is_missing() {
+        let cfg = AppConfig::from_env_config(EnvConfig::default());
+
+        assert!(!cfg.is_csrf_enabled());
+    }
+
+    #[test]
+    fn csrf_is_disabled_when_secret_is_empty() {
+        for secret in ["", " ", "   ", "\t", "\n"] {
+            let env = EnvConfig::from_iter([("CSRF_SECRET", secret)]);
+
+            let cfg = AppConfig::from_env_config(env);
+
+            assert!(
+                !cfg.is_csrf_enabled(),
+                "Expected CSRF to be disabled for {secret:?}"
+            );
+        }
     }
 }
