@@ -1,30 +1,87 @@
 //! # Image Configuration
 //!
-//! Provides basic configuration parameters for image processing,
+//! Provides configuration parameters for image processing,
 //! such as maximum allowed width and height.
 //!
-//! Typically used to constrain uploaded image sizes or
-//! to define resize limits in image processing pipelines.
+//! Configuration can be built from an [`EnvConfig`] environment snapshot.
+//!
+//! # Environment Variables
+//!
+//! - `IMAGE_MAX_WIDTH` — maximum image width in pixels (default: `1280`)
+//! - `IMAGE_MAX_HEIGHT` — maximum image height in pixels (default: `1280`)
+//!
+//! Invalid numeric values fall back to their defaults.
 //!
 //! # Example
+//!
 //! ```rust
+//! use wzs_web::config::env::EnvConfig;
 //! use wzs_web::config::image::ImageConfig;
 //!
-//! let cfg = ImageConfig {
-//!     max_width: 1920,
-//!     max_height: 1080,
-//! };
+//! let env = EnvConfig::from_iter([
+//!     ("IMAGE_MAX_WIDTH", "1920"),
+//!     ("IMAGE_MAX_HEIGHT", "1080"),
+//! ]);
+//!
+//! let cfg = ImageConfig::from_env_config(&env);
+//!
 //! assert_eq!(cfg.max_width, 1920);
 //! assert_eq!(cfg.max_height, 1080);
 //! ```
+
+use crate::config::env::EnvConfig;
+
+/// Default maximum image width in pixels.
+const DEFAULT_MAX_WIDTH: u32 = 1280;
+
+/// Default maximum image height in pixels.
+const DEFAULT_MAX_HEIGHT: u32 = 1280;
 
 /// Configuration for image processing or upload validation.
 ///
 /// Defines upper limits for image dimensions.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageConfig {
+    /// Maximum allowed image width in pixels.
     pub max_width: u32,
+
+    /// Maximum allowed image height in pixels.
     pub max_height: u32,
+}
+
+impl ImageConfig {
+    /// Builds an [`ImageConfig`] from an [`EnvConfig`] snapshot.
+    ///
+    /// Missing or invalid values use the following defaults:
+    ///
+    /// - `IMAGE_MAX_WIDTH`: `1280`
+    /// - `IMAGE_MAX_HEIGHT`: `1280`
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use wzs_web::config::env::EnvConfig;
+    /// use wzs_web::config::image::ImageConfig;
+    ///
+    /// let env = EnvConfig::from_iter([
+    ///     ("IMAGE_MAX_WIDTH", "2048"),
+    ///     ("IMAGE_MAX_HEIGHT", "1536"),
+    /// ]);
+    ///
+    /// let cfg = ImageConfig::from_env_config(&env);
+    ///
+    /// assert_eq!(cfg.max_width, 2048);
+    /// assert_eq!(cfg.max_height, 1536);
+    /// ```
+    pub fn from_env_config(env: &EnvConfig) -> Self {
+        Self {
+            max_width: env.get_u32("IMAGE_MAX_WIDTH").unwrap_or(DEFAULT_MAX_WIDTH),
+
+            max_height: env
+                .get_u32("IMAGE_MAX_HEIGHT")
+                .unwrap_or(DEFAULT_MAX_HEIGHT),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -37,8 +94,53 @@ mod tests {
             max_width: 1920,
             max_height: 1080,
         };
+
         assert_eq!(cfg.max_width, 1920);
         assert_eq!(cfg.max_height, 1080);
+    }
+
+    #[test]
+    fn from_env_config_uses_defaults() {
+        let env = EnvConfig::default();
+
+        let cfg = ImageConfig::from_env_config(&env);
+
+        assert_eq!(cfg.max_width, 1280);
+        assert_eq!(cfg.max_height, 1280);
+    }
+
+    #[test]
+    fn from_env_config_reads_values() {
+        let env = EnvConfig::from_iter([("IMAGE_MAX_WIDTH", "2048"), ("IMAGE_MAX_HEIGHT", "1536")]);
+
+        let cfg = ImageConfig::from_env_config(&env);
+
+        assert_eq!(cfg.max_width, 2048);
+        assert_eq!(cfg.max_height, 1536);
+    }
+
+    #[test]
+    fn from_env_config_uses_defaults_for_invalid_values() {
+        let env = EnvConfig::from_iter([
+            ("IMAGE_MAX_WIDTH", "invalid"),
+            ("IMAGE_MAX_HEIGHT", "not-a-number"),
+        ]);
+
+        let cfg = ImageConfig::from_env_config(&env);
+
+        assert_eq!(cfg.max_width, 1280);
+        assert_eq!(cfg.max_height, 1280);
+    }
+
+    #[test]
+    fn from_env_config_allows_independent_values() {
+        let env =
+            EnvConfig::from_iter([("IMAGE_MAX_WIDTH", "1920"), ("IMAGE_MAX_HEIGHT", "invalid")]);
+
+        let cfg = ImageConfig::from_env_config(&env);
+
+        assert_eq!(cfg.max_width, 1920);
+        assert_eq!(cfg.max_height, 1280);
     }
 
     #[test]
@@ -49,11 +151,13 @@ mod tests {
         };
 
         let clone = cfg.clone();
+
         assert_eq!(cfg, clone);
 
-        let dbg_str = format!("{:?}", cfg);
-        assert!(dbg_str.contains("800"));
-        assert!(dbg_str.contains("600"));
+        let debug = format!("{cfg:?}");
+
+        assert!(debug.contains("800"));
+        assert!(debug.contains("600"));
     }
 
     #[test]
@@ -62,10 +166,12 @@ mod tests {
             max_width: 100,
             max_height: 200,
         };
+
         let cfg2 = ImageConfig {
             max_width: 100,
             max_height: 200,
         };
+
         let cfg3 = ImageConfig {
             max_width: 300,
             max_height: 400,
