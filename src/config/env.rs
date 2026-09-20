@@ -11,6 +11,7 @@
 //! - Reading environment variables only once at application startup.
 //! - Preserving application-specific variables unknown to `wzs-web`.
 //! - Building multiple configuration sets from the same environment snapshot.
+//! - Creating prefixed configuration views for multiple API entry points.
 //! - Testing configuration without modifying process environment variables.
 //!
 //! # Examples
@@ -38,6 +39,24 @@
 //!
 //! assert_eq!(env.get_bool("PUBLIC_CORS_ENABLED"), Some(true));
 //! assert_eq!(env.get_u32("BCRYPT_COST"), Some(4));
+//! ```
+//!
+//! ## Create a prefixed configuration view
+//!
+//! ```rust
+//! use wzs_web::config::env::EnvConfig;
+//!
+//! let env = EnvConfig::from_iter([
+//!     ("PUBLIC_CORS_ENABLED", "true"),
+//!     ("PUBLIC_JWT_SECRET", "public-secret"),
+//!     ("ADMIN_JWT_SECRET", "admin-secret"),
+//! ]);
+//!
+//! let public_env = env.with_prefix("PUBLIC_");
+//!
+//! assert_eq!(public_env.get("CORS_ENABLED"), Some("true"));
+//! assert_eq!(public_env.get("JWT_SECRET"), Some("public-secret"));
+//! assert_eq!(public_env.get("ADMIN_JWT_SECRET"), None);
 //! ```
 //!
 //! # Security
@@ -89,18 +108,6 @@ impl EnvConfig {
     ///
     /// This makes the configuration effectively a snapshot of the environment
     /// at application startup.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use wzs_web::config::env::EnvConfig;
-    ///
-    /// let env = EnvConfig::from_env();
-    ///
-    /// if let Some(value) = env.get("APP_ENV") {
-    ///     println!("Application environment: {value}");
-    /// }
-    /// ```
     pub fn from_env() -> Self {
         Self::from_iter(std::env::vars())
     }
@@ -113,19 +120,6 @@ impl EnvConfig {
     /// Both keys and values may be any type convertible into [`String`].
     ///
     /// If the same key appears multiple times, the last value wins.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use wzs_web::config::env::EnvConfig;
-    ///
-    /// let env = EnvConfig::from_iter([
-    ///     ("PUBLIC_CORS_ENABLED", "true"),
-    ///     ("BCRYPT_COST", "4"),
-    /// ]);
-    ///
-    /// assert_eq!(env.get("BCRYPT_COST"), Some("4"));
-    /// ```
     pub fn from_iter<I, K, V>(iter: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -140,11 +134,30 @@ impl EnvConfig {
         }
     }
 
-    /// Returns the raw value associated with `key`.
+    /// Creates a new environment snapshot containing only variables with
+    /// `prefix`, with that prefix removed from their keys.
     ///
-    /// No trimming, parsing, or other transformation is performed.
+    /// This is useful when multiple independently configured services or API
+    /// entry points share the same process environment.
     ///
-    /// Returns `None` when the key does not exist.
+    /// For example:
+    ///
+    /// ```text
+    /// PUBLIC_JWT_SECRET=public-secret
+    /// PUBLIC_CORS_ENABLED=true
+    /// ADMIN_JWT_SECRET=admin-secret
+    /// ```
+    ///
+    /// Calling `with_prefix("PUBLIC_")` produces an environment equivalent to:
+    ///
+    /// ```text
+    /// JWT_SECRET=public-secret
+    /// CORS_ENABLED=true
+    /// ```
+    ///
+    /// Variables that do not start with `prefix` are not included.
+    ///
+    /// The original `EnvConfig` is not modified.
     ///
     /// # Example
     ///
@@ -152,12 +165,38 @@ impl EnvConfig {
     /// use wzs_web::config::env::EnvConfig;
     ///
     /// let env = EnvConfig::from_iter([
-    ///     ("SCHOOL_YEAR", "2026"),
+    ///     ("PUBLIC_JWT_SECRET", "public-secret"),
+    ///     ("PUBLIC_CORS_ENABLED", "true"),
+    ///     ("ADMIN_JWT_SECRET", "admin-secret"),
     /// ]);
     ///
-    /// assert_eq!(env.get("SCHOOL_YEAR"), Some("2026"));
-    /// assert_eq!(env.get("UNKNOWN"), None);
+    /// let public_env = env.with_prefix("PUBLIC_");
+    ///
+    /// assert_eq!(
+    ///     public_env.get("JWT_SECRET"),
+    ///     Some("public-secret")
+    /// );
+    /// assert_eq!(
+    ///     public_env.get_bool("CORS_ENABLED"),
+    ///     Some(true)
+    /// );
+    /// assert_eq!(
+    ///     public_env.get("ADMIN_JWT_SECRET"),
+    ///     None
+    /// );
     /// ```
+    pub fn with_prefix(&self, prefix: &str) -> Self {
+        Self::from_iter(self.values.iter().filter_map(|(key, value)| {
+            key.strip_prefix(prefix)
+                .map(|key| (key.to_string(), value.clone()))
+        }))
+    }
+
+    /// Returns the raw value associated with `key`.
+    ///
+    /// No trimming, parsing, or other transformation is performed.
+    ///
+    /// Returns `None` when the key does not exist.
     pub fn get(&self, key: &str) -> Option<&str> {
         self.values.get(key).map(String::as_str)
     }
@@ -167,21 +206,6 @@ impl EnvConfig {
     /// Returns `None` when the key does not exist.
     ///
     /// Prefer [`EnvConfig::get`] when ownership is not required.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use wzs_web::config::env::EnvConfig;
-    ///
-    /// let env = EnvConfig::from_iter([
-    ///     ("PUBLIC_WEB_BASE_URL", "https://example.com"),
-    /// ]);
-    ///
-    /// assert_eq!(
-    ///     env.get_string("PUBLIC_WEB_BASE_URL"),
-    ///     Some("https://example.com".to_string())
-    /// );
-    /// ```
     pub fn get_string(&self, key: &str) -> Option<String> {
         self.values.get(key).cloned()
     }
@@ -208,75 +232,27 @@ impl EnvConfig {
     /// single or double quotes is also ignored for compatibility with existing
     /// configuration behavior.
     ///
-    /// Returns `None` when:
-    ///
-    /// - the key does not exist, or
-    /// - the value is not a recognized boolean representation.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use wzs_web::config::env::EnvConfig;
-    ///
-    /// let env = EnvConfig::from_iter([
-    ///     ("A", "true"),
-    ///     ("B", "off"),
-    ///     ("C", "invalid"),
-    /// ]);
-    ///
-    /// assert_eq!(env.get_bool("A"), Some(true));
-    /// assert_eq!(env.get_bool("B"), Some(false));
-    /// assert_eq!(env.get_bool("C"), None);
-    /// assert_eq!(env.get_bool("D"), None);
-    /// ```
+    /// Returns `None` when the key does not exist or the value is invalid.
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         self.get(key).and_then(parse_bool)
     }
 
     /// Parses the value associated with `key` as a `u16`.
-    ///
-    /// Leading and trailing whitespace is ignored.
-    ///
-    /// Returns `None` when the key does not exist or parsing fails.
     pub fn get_u16(&self, key: &str) -> Option<u16> {
         self.parse(key)
     }
 
     /// Parses the value associated with `key` as a `u32`.
-    ///
-    /// Leading and trailing whitespace is ignored.
-    ///
-    /// Returns `None` when the key does not exist or parsing fails.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use wzs_web::config::env::EnvConfig;
-    ///
-    /// let env = EnvConfig::from_iter([
-    ///     ("BCRYPT_COST", "12"),
-    /// ]);
-    ///
-    /// assert_eq!(env.get_u32("BCRYPT_COST"), Some(12));
-    /// ```
     pub fn get_u32(&self, key: &str) -> Option<u32> {
         self.parse(key)
     }
 
     /// Parses the value associated with `key` as a `u64`.
-    ///
-    /// Leading and trailing whitespace is ignored.
-    ///
-    /// Returns `None` when the key does not exist or parsing fails.
     pub fn get_u64(&self, key: &str) -> Option<u64> {
         self.parse(key)
     }
 
     /// Parses the value associated with `key` as a `usize`.
-    ///
-    /// Leading and trailing whitespace is ignored.
-    ///
-    /// Returns `None` when the key does not exist or parsing fails.
     pub fn get_usize(&self, key: &str) -> Option<usize> {
         self.parse(key)
     }
@@ -284,19 +260,6 @@ impl EnvConfig {
     /// Returns `true` when `key` exists in this environment snapshot.
     ///
     /// An empty value still counts as present.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use wzs_web::config::env::EnvConfig;
-    ///
-    /// let env = EnvConfig::from_iter([
-    ///     ("EMPTY_VALUE", ""),
-    /// ]);
-    ///
-    /// assert!(env.contains_key("EMPTY_VALUE"));
-    /// assert!(!env.contains_key("UNKNOWN"));
-    /// ```
     pub fn contains_key(&self, key: &str) -> bool {
         self.values.contains_key(key)
     }
@@ -313,8 +276,6 @@ impl EnvConfig {
 
     /// Parses an environment value using its [`std::str::FromStr`]
     /// implementation.
-    ///
-    /// This private helper provides consistent behavior for numeric getters.
     fn parse<T>(&self, key: &str) -> Option<T>
     where
         T: std::str::FromStr,
@@ -334,8 +295,6 @@ impl fmt::Debug for EnvConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut keys: Vec<&str> = self.values.keys().map(String::as_str).collect();
 
-        // HashMap iteration order is intentionally unspecified. Sorting makes
-        // debug output deterministic and easier to inspect.
         keys.sort_unstable();
 
         f.debug_struct("EnvConfig").field("keys", &keys).finish()
@@ -343,9 +302,6 @@ impl fmt::Debug for EnvConfig {
 }
 
 /// Parses a string as a boolean value.
-///
-/// This function is intentionally strict: an unrecognized value returns
-/// `None` instead of silently treating the value as `false`.
 fn parse_bool(value: &str) -> Option<bool> {
     let value = value
         .trim()
@@ -369,51 +325,11 @@ fn parse_bool(value: &str) -> Option<bool> {
 // variables can be captured once and injected into configuration loaders.
 
 /// Reads a boolean flag from an environment variable.
-///
-/// Returns `true` for any of the following case-insensitive values:
-///
-/// - `"1"`
-/// - `"true"`
-/// - `"yes"`
-/// - `"on"`
-///
-/// Any other present value is treated as `false`.
-///
-/// If the environment variable is missing, `default` is returned.
-///
-/// New code should generally prefer [`EnvConfig::get_bool`].
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use wzs_web::config::env::read_flag;
-///
-/// let debug = read_flag("DEBUG", false);
-/// ```
 pub fn read_flag(name: &str, default: bool) -> bool {
     read_flag_from(|key| std::env::var(key).ok(), name, default)
 }
 
 /// Reads a boolean flag using a custom provider function.
-///
-/// This helper is retained for backward compatibility and for existing tests.
-///
-/// Unlike [`EnvConfig::get_bool`], an unrecognized present value is treated as
-/// `false`.
-///
-/// # Example
-///
-/// ```rust
-/// use wzs_web::config::env::read_flag_from;
-///
-/// let value = read_flag_from(
-///     |_| Some("true".into()),
-///     "ENABLE_FEATURE",
-///     false,
-/// );
-///
-/// assert!(value);
-/// ```
 pub fn read_flag_from<F>(provider: F, name: &str, default: bool) -> bool
 where
     F: Fn(&str) -> Option<String>,
@@ -425,21 +341,6 @@ where
 }
 
 /// Reads an unsigned integer (`u32`) from an environment variable.
-///
-/// Returns `default` when:
-///
-/// - the environment variable does not exist, or
-/// - the value cannot be parsed as a `u32`.
-///
-/// New code should generally prefer [`EnvConfig::get_u32`].
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use wzs_web::config::env::read_u32;
-///
-/// let limit = read_u32("LIMIT", 100);
-/// ```
 pub fn read_u32(name: &str, default: u32) -> u32 {
     std::env::var(name)
         .ok()
@@ -463,6 +364,7 @@ mod tests {
         ]);
 
         assert_eq!(env.get("BCRYPT_COST"), Some("4"));
+
         assert_eq!(env.get("PUBLIC_WEB_BASE_URL"), Some("https://example.com"));
     }
 
@@ -479,6 +381,115 @@ mod tests {
 
         assert!(env.is_empty());
         assert_eq!(env.len(), 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Prefix views
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn with_prefix_selects_matching_values() {
+        let env = EnvConfig::from_iter([
+            ("PUBLIC_JWT_SECRET", "public-secret"),
+            ("PUBLIC_CORS_ENABLED", "true"),
+            ("ADMIN_JWT_SECRET", "admin-secret"),
+            ("BCRYPT_COST", "12"),
+        ]);
+
+        let public_env = env.with_prefix("PUBLIC_");
+
+        assert_eq!(public_env.get("JWT_SECRET"), Some("public-secret"));
+
+        assert_eq!(public_env.get("CORS_ENABLED"), Some("true"));
+
+        assert_eq!(public_env.len(), 2);
+    }
+
+    #[test]
+    fn with_prefix_removes_prefix_from_keys() {
+        let env = EnvConfig::from_iter([("PUBLIC_CORS_ORIGINS", "https://example.com")]);
+
+        let public_env = env.with_prefix("PUBLIC_");
+
+        assert_eq!(public_env.get("CORS_ORIGINS"), Some("https://example.com"));
+
+        assert_eq!(public_env.get("PUBLIC_CORS_ORIGINS"), None);
+    }
+
+    #[test]
+    fn with_prefix_excludes_other_prefixes_and_unprefixed_values() {
+        let env = EnvConfig::from_iter([
+            ("PUBLIC_JWT_SECRET", "public-secret"),
+            ("ADMIN_JWT_SECRET", "admin-secret"),
+            ("JWT_SECRET", "legacy-secret"),
+            ("BCRYPT_COST", "12"),
+        ]);
+
+        let public_env = env.with_prefix("PUBLIC_");
+
+        assert_eq!(public_env.get("JWT_SECRET"), Some("public-secret"));
+
+        assert_eq!(public_env.get("ADMIN_JWT_SECRET"), None);
+
+        assert_eq!(public_env.get("BCRYPT_COST"), None);
+        assert_eq!(public_env.len(), 1);
+    }
+
+    #[test]
+    fn with_prefix_returns_empty_config_when_no_values_match() {
+        let env =
+            EnvConfig::from_iter([("ADMIN_JWT_SECRET", "admin-secret"), ("BCRYPT_COST", "12")]);
+
+        let public_env = env.with_prefix("PUBLIC_");
+
+        assert!(public_env.is_empty());
+    }
+
+    #[test]
+    fn with_prefix_does_not_modify_original_config() {
+        let env = EnvConfig::from_iter([
+            ("PUBLIC_JWT_SECRET", "public-secret"),
+            ("ADMIN_JWT_SECRET", "admin-secret"),
+        ]);
+
+        let public_env = env.with_prefix("PUBLIC_");
+
+        assert_eq!(env.get("PUBLIC_JWT_SECRET"), Some("public-secret"));
+
+        assert_eq!(env.get("ADMIN_JWT_SECRET"), Some("admin-secret"));
+
+        assert_eq!(public_env.get("JWT_SECRET"), Some("public-secret"));
+    }
+
+    #[test]
+    fn with_prefix_preserves_empty_values() {
+        let env = EnvConfig::from_iter([("PUBLIC_JWT_SECRET", "")]);
+
+        let public_env = env.with_prefix("PUBLIC_");
+
+        assert!(public_env.contains_key("JWT_SECRET"));
+        assert_eq!(public_env.get("JWT_SECRET"), Some(""));
+    }
+
+    #[test]
+    fn with_prefix_can_create_independent_api_configs() {
+        let env = EnvConfig::from_iter([
+            ("PUBLIC_JWT_SECRET", "public-secret"),
+            ("PUBLIC_CORS_ENABLED", "true"),
+            ("ADMIN_JWT_SECRET", "admin-secret"),
+            ("ADMIN_CORS_ENABLED", "false"),
+        ]);
+
+        let public_env = env.with_prefix("PUBLIC_");
+        let admin_env = env.with_prefix("ADMIN_");
+
+        assert_eq!(public_env.get("JWT_SECRET"), Some("public-secret"));
+
+        assert_eq!(public_env.get_bool("CORS_ENABLED"), Some(true));
+
+        assert_eq!(admin_env.get("JWT_SECRET"), Some("admin-secret"));
+
+        assert_eq!(admin_env.get_bool("CORS_ENABLED"), Some(false));
     }
 
     // -------------------------------------------------------------------------
@@ -691,6 +702,7 @@ mod tests {
         assert!(debug.contains("SMTP_PASSWORD"));
 
         assert!(!debug.contains("super-secret-jwt-value"));
+
         assert!(!debug.contains("super-secret-password"));
     }
 
