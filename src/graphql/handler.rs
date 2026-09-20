@@ -5,6 +5,7 @@ use axum::Extension;
 use axum_extra::extract::cookie::CookieJar;
 
 use crate::auth::CurrentUser;
+use crate::config::auth::AuthConfig;
 use crate::config::csrf::CsrfConfig;
 use crate::graphql::config::GraphqlAuthConfig;
 use crate::graphql::context::extract_current_user;
@@ -42,11 +43,16 @@ use crate::graphql::guard::validate_csrf_guard;
 ///
 /// # Authentication Model
 ///
-/// - `Some(CurrentUser)` is injected when authentication succeeds
-/// - `None` is injected when authentication is disabled or fails
+/// Authentication is controlled by [`AuthConfig`].
+///
+/// - When JWT authentication is enabled and a valid JWT is present,
+///   `Some(CurrentUser)` is injected.
+/// - When authentication is disabled, `None` is injected.
+/// - When authentication is enabled but the JWT is missing or invalid,
+///   `None` is injected.
 ///
 /// This allows resolvers to explicitly distinguish between
-/// *authenticated* and *unauthenticated* requests using the type system.
+/// authenticated and unauthenticated requests using the type system.
 ///
 /// # Type Parameters
 ///
@@ -60,8 +66,8 @@ pub async fn graphql_post_handler<Q, M, S>(
     Extension(schema): Extension<Schema<Q, M, S>>,
     Extension(enable_csrf): Extension<bool>,
     Extension(csrf_cfg): Extension<CsrfConfig>,
-    Extension(jwt_secret): Extension<Option<String>>,
-    Extension(auth_cfg): Extension<GraphqlAuthConfig>,
+    Extension(auth): Extension<AuthConfig>,
+    Extension(graphql_auth): Extension<GraphqlAuthConfig>,
     jar: CookieJar,
     headers: HeaderMap,
     req: GraphQLRequest,
@@ -87,13 +93,19 @@ where
     // -----------------------------
     //
     // Extract an authenticated principal from the JWT cookie.
-    // This step is intentionally application-agnostic: only the
-    // JWT subject is extracted and wrapped in `CurrentUser`.
+    //
+    // AuthConfig represents whether JWT authentication is enabled:
+    //
+    // - Some(secret) -> authentication enabled
+    // - None         -> authentication disabled
+    //
+    // This step remains application-agnostic. Only the JWT
+    // subject is extracted and wrapped in CurrentUser.
     let current_user: Option<CurrentUser> = extract_current_user(
         &jar,
         &headers,
-        jwt_secret.as_deref(),
-        &auth_cfg.jwt_cookie_name,
+        auth.jwt_secret(),
+        &graphql_auth.jwt_cookie_name,
     );
 
     // -----------------------------
@@ -109,13 +121,16 @@ where
         .into()
 }
 
-#[tokio::test]
-async fn graphql_handler_executes_query() {
+#[cfg(test)]
+mod tests {
     use async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::{routing::post, Extension, Router};
-    use tower::ServiceExt; // oneshot
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::config::env::EnvConfig;
 
     struct Query;
 
@@ -126,30 +141,35 @@ async fn graphql_handler_executes_query() {
         }
     }
 
-    let schema = Schema::build(Query, EmptyMutation, EmptySubscription).finish();
+    #[tokio::test]
+    async fn graphql_handler_executes_query_without_authentication() {
+        let schema = Schema::build(Query, EmptyMutation, EmptySubscription).finish();
 
-    let app = Router::new()
-        .route(
-            "/graphql",
-            post(graphql_post_handler::<Query, EmptyMutation, EmptySubscription>),
-        )
-        .layer(Extension(schema))
-        .layer(Extension(false)) // CSRF disabled
-        .layer(Extension(CsrfConfig::from_env_with(|_| None)))
-        .layer(Extension(None::<String>))
-        .layer(Extension(GraphqlAuthConfig::new("auth")));
+        let auth = AuthConfig::from_env_config(&EnvConfig::default());
 
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/graphql")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"query":"{ dummy }"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+        let app = Router::new()
+            .route(
+                "/graphql",
+                post(graphql_post_handler::<Query, EmptyMutation, EmptySubscription>),
+            )
+            .layer(Extension(schema))
+            .layer(Extension(false))
+            .layer(Extension(CsrfConfig::from_env_with(|_| None)))
+            .layer(Extension(auth))
+            .layer(Extension(GraphqlAuthConfig::new("auth")));
 
-    assert_eq!(response.status(), StatusCode::OK);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/graphql")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"query":"{ dummy }"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }
