@@ -1,12 +1,15 @@
 //! # Application Configuration Loader
 //!
-//! Provides a unified configuration loader for application settings,
-//! including authentication, database, HTTP, CORS, CSRF, image, upload,
-//! mail, and application-specific environment values.
+//! Provides a unified configuration loader for application-wide settings
+//! and independently configured API entry points.
 //!
 //! The process environment is captured into [`EnvConfig`] once during
 //! application startup. Typed configuration structures are then built from
 //! that same immutable environment snapshot.
+//!
+//! Applications may expose multiple API entry points, such as public and
+//! administrative GraphQL APIs. API-specific configuration is loaded from
+//! `PUBLIC_*` and `ADMIN_*` environment variables.
 //!
 //! For non-production environments, `.env` files are loaded before the
 //! snapshot is created.
@@ -18,113 +21,51 @@
 //! 1. Reads `APP_ENV` from the process environment.
 //! 2. Loads an appropriate `.env` file when not in production.
 //! 3. Captures all environment variables into [`EnvConfig`].
-//! 4. Builds [`AppConfig`] and its typed sub-configurations from that
-//!    snapshot.
+//! 4. Builds application-wide configuration from that snapshot.
+//! 5. Builds public and administrative API configuration from prefixed
+//!    environment views.
 //!
-//! This allows application-specific variables that are not known to
-//! `wzs-web` to remain available through [`AppConfig::env`].
-//!
-//! # Environment Variables
-//!
-//! | Variable | Description | Default |
-//! |-----------|-------------|---------|
-//! | `APP_ENV` | Current environment | `"development"` |
-//! | `DOTENV_FILE` | Optional custom dotenv file | *none* |
-//! | `DATABASE_URL` | Database connection URL | *none* |
-//! | `JWT_SECRET` | Secret used to sign JWTs | authentication disabled |
-//! | `HTML_PATH` | Path to HTML template file | `""` |
-//! | `HTTP_MAX_BODY_BYTES` | Maximum request body size in bytes | derived from MB |
-//! | `HTTP_MAX_BODY_MB` | Maximum request body size in MiB | `5` |
-//! | `CSRF_SECRET` | CSRF signing secret | random if missing |
-//! | `GRAPHIQL` | Enable GraphiQL | `false` |
-//! | `CORS_ENABLED` | Enable CORS | `false` |
-//! | `CORS_ORIGINS` | Allowed CORS origins | `""` |
-//! | `CORS_CREDENTIALS` | Allow CORS credentials | `false` |
-//! | `UPLOAD_ROOT` | Root upload directory | `"./var/uploads"` |
-//! | `UPLOAD_IMAGE_DIR` | Image upload subdirectory | `"images"` |
-//! | `UPLOAD_FILE_DIR` | File upload subdirectory | `"files"` |
-//! | `IMAGE_MAX_WIDTH` | Maximum image width | `1280` |
-//! | `IMAGE_MAX_HEIGHT` | Maximum image height | `1280` |
-//! | `SMTP_HOST` | SMTP server hostname | *none* |
-//! | `SMTP_PORT` | SMTP server port | *none* |
-//! | `SMTP_USERNAME` | SMTP username | *none* |
-//! | `SMTP_PASSWORD` | SMTP password | *none* |
-//! | `SMTP_FROM_EMAIL` | Sender email address | *none* |
-//! | `SMTP_FROM_NAME` | Sender display name | `"Notifier"` |
-//! | `NOTIFY_TO_EMAIL` | Notification recipients | empty |
-//!
-//! # Example
-//!
-//! ```rust,no_run
-//! use wzs_web::config::app::AppConfig;
-//!
-//! let cfg = AppConfig::from_env();
-//!
-//! let bcrypt_cost = cfg
-//!     .env
-//!     .get_u32("BCRYPT_COST")
-//!     .unwrap_or(12);
-//!
-//! println!("bcrypt cost: {bcrypt_cost}");
-//! ```
+//! Application-specific variables that are not known to `wzs-web` remain
+//! available through [`AppConfig::env`].
 
 use std::env;
 
 use crate::config::{
-    auth::AuthConfig,
-    csrf::CsrfConfig,
-    db::DbConfig,
-    env::EnvConfig,
-    image::ImageConfig,
-    mail::MailConfig,
-    upload::UploadConfig,
-    web::{CorsConfig, HttpConfig},
+    api::ApiConfig, db::DbConfig, env::EnvConfig, image::ImageConfig, mail::MailConfig,
+    upload::UploadConfig, web::HttpConfig,
 };
+
+/// Default JWT cookie name for the public API.
+const DEFAULT_PUBLIC_JWT_COOKIE_NAME: &str = "public_token";
+
+/// Default JWT cookie name for the administrative API.
+const DEFAULT_ADMIN_JWT_COOKIE_NAME: &str = "admin_token";
 
 /// Top-level application configuration.
 ///
-/// `AppConfig` contains both:
+/// `AppConfig` contains:
 ///
-/// - typed configuration used directly by `wzs-web`, and
-/// - the complete [`EnvConfig`] snapshot used to construct it.
+/// - application-wide typed configuration,
+/// - independently configured public and administrative APIs, and
+/// - the complete [`EnvConfig`] snapshot used to construct them.
 ///
-/// Keeping the environment snapshot makes application-specific variables
-/// available without requiring `wzs-web` to know about every possible
-/// application setting.
+/// API-specific configuration is read from prefixed environment variables:
+///
+/// - `PUBLIC_*` for [`AppConfig::public_api`]
+/// - `ADMIN_*` for [`AppConfig::admin_api`]
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     /// Snapshot of all environment variables captured at startup.
     ///
-    /// This can also be used for application-specific configuration:
-    ///
-    /// ```rust,no_run
-    /// # use wzs_web::config::app::AppConfig;
-    /// let cfg = AppConfig::from_env();
-    ///
-    /// let bcrypt_cost = cfg
-    ///     .env
-    ///     .get_u32("BCRYPT_COST")
-    ///     .unwrap_or(12);
-    /// ```
+    /// Application-specific settings that are not known by `wzs-web`
+    /// remain available through this snapshot.
     pub env: EnvConfig,
 
-    /// Authentication configuration.
-    ///
-    /// JWT authentication is disabled when `JWT_SECRET` is missing,
-    /// empty, or whitespace-only.
-    pub auth: AuthConfig,
-
-    /// Database configuration.
+    /// Database configuration shared by the application.
     pub db: DbConfig,
 
-    /// HTTP server configuration.
+    /// HTTP server configuration shared by all API entry points.
     pub http: HttpConfig,
-
-    /// CSRF configuration.
-    pub csrf: CsrfConfig,
-
-    /// Cross-Origin Resource Sharing configuration.
-    pub cors: CorsConfig,
 
     /// Image processing configuration.
     pub image: ImageConfig,
@@ -134,6 +75,16 @@ pub struct AppConfig {
 
     /// Optional SMTP configuration.
     pub mail: Option<MailConfig>,
+
+    /// Configuration for the public API.
+    ///
+    /// Values are loaded from `PUBLIC_*` environment variables.
+    pub public_api: ApiConfig,
+
+    /// Configuration for the administrative API.
+    ///
+    /// Values are loaded from `ADMIN_*` environment variables.
+    pub admin_api: ApiConfig,
 
     /// Whether the GraphiQL IDE is enabled.
     pub enable_graphiql: bool,
@@ -158,16 +109,6 @@ impl AppConfig {
     /// 1. `DOTENV_FILE`, when explicitly configured;
     /// 2. `.env.{APP_ENV}`;
     /// 3. `.env`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use wzs_web::config::app::AppConfig;
-    ///
-    /// let cfg = AppConfig::from_env();
-    ///
-    /// assert!(cfg.http.max_body_bytes > 0);
-    /// ```
     pub fn from_env() -> Self {
         load_dotenv();
 
@@ -179,52 +120,18 @@ impl AppConfig {
     /// Builds application configuration from an [`EnvConfig`] snapshot.
     ///
     /// This constructor does not access or modify the process environment.
-    /// It is therefore suitable for deterministic tests and for applications
-    /// that construct their configuration programmatically.
     ///
-    /// Unknown or application-specific environment values remain available
-    /// through [`AppConfig::env`].
+    /// Public and administrative API settings are constructed from
+    /// `PUBLIC_*` and `ADMIN_*` environment variables respectively.
     ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use wzs_web::config::app::AppConfig;
-    /// use wzs_web::config::env::EnvConfig;
-    ///
-    /// let env = EnvConfig::from_iter([
-    ///     ("DATABASE_URL", "mysql://localhost/example"),
-    ///     ("BCRYPT_COST", "4"),
-    ///     ("PUBLIC_WEB_BASE_URL", "http://localhost:5173"),
-    /// ]);
-    ///
-    /// let cfg = AppConfig::from_env_config(env);
-    ///
-    /// assert_eq!(
-    ///     cfg.env.get_u32("BCRYPT_COST"),
-    ///     Some(4),
-    /// );
-    ///
-    /// assert_eq!(
-    ///     cfg.env.get("PUBLIC_WEB_BASE_URL"),
-    ///     Some("http://localhost:5173"),
-    /// );
-    /// ```
+    /// Unknown and application-specific values remain available through
+    /// [`AppConfig::env`].
     pub fn from_env_config(env: EnvConfig) -> Self {
-        let auth = AuthConfig::from_env_config(&env);
         let db = DbConfig::from_env_config(&env);
         let http = HttpConfig::from_env_config(&env);
-        let csrf = CsrfConfig::from_env_config(&env);
-        let cors = CorsConfig::from_env_config(&env);
         let image = ImageConfig::from_env_config(&env);
         let upload = UploadConfig::from_env_config(&env);
 
-        // Mail is considered configured only when SMTP_HOST is present.
-        //
-        // This preserves the previous AppConfig behavior:
-        //
-        // - no SMTP_HOST -> mail is disabled
-        // - SMTP_HOST + valid required settings -> Some(MailConfig)
-        // - SMTP_HOST + incomplete/invalid settings -> mail is disabled
         let mail = if env.contains_key("SMTP_HOST") {
             MailConfig::from_env_config(&env).ok()
         } else {
@@ -235,29 +142,35 @@ impl AppConfig {
 
         let html_path = env.get_string("HTML_PATH").unwrap_or_default();
 
+        let public_jwt_cookie_name = env
+            .get_string("PUBLIC_JWT_COOKIE_NAME")
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_PUBLIC_JWT_COOKIE_NAME.to_string());
+
+        let admin_jwt_cookie_name = env
+            .get_string("ADMIN_JWT_COOKIE_NAME")
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_ADMIN_JWT_COOKIE_NAME.to_string());
+
+        let public_env = env.with_prefix("PUBLIC_");
+        let admin_env = env.with_prefix("ADMIN_");
+
+        let public_api = ApiConfig::from_env_config(&public_env, public_jwt_cookie_name);
+
+        let admin_api = ApiConfig::from_env_config(&admin_env, admin_jwt_cookie_name);
+
         Self {
             env,
-            auth,
             db,
             http,
-            csrf,
-            cors,
             image,
             upload,
             mail,
+            public_api,
+            admin_api,
             enable_graphiql,
             html_path,
         }
-    }
-
-    /// Returns `true` if CSRF protection is enabled.
-    ///
-    /// CSRF protection is enabled only when `CSRF_SECRET` exists
-    /// and contains a non-empty value after trimming whitespace.
-    pub fn is_csrf_enabled(&self) -> bool {
-        self.env
-            .get("CSRF_SECRET")
-            .is_some_and(|value| !value.trim().is_empty())
     }
 }
 
@@ -285,10 +198,6 @@ fn load_dotenv() {
 }
 
 /// Reads a boolean flag while preserving the existing configuration behavior.
-///
-/// Missing values return `default`. When a value is present, only recognized
-/// truthy values evaluate to `true`; all other supplied values evaluate to
-/// `false`.
 fn read_flag(env: &EnvConfig, key: &str, default: bool) -> bool {
     match env.get(key) {
         Some(value) => is_truthy(value),
@@ -344,28 +253,8 @@ mod tests {
     }
 
     #[test]
-    fn cors_enabled_is_loaded_from_env_config() {
-        let env = EnvConfig::from_iter([("CORS_ENABLED", "true")]);
-
-        let cfg = AppConfig::from_env_config(env);
-
-        assert!(cfg.cors.enabled);
-    }
-
-    #[test]
-    fn cors_enabled_defaults_to_false() {
-        let env = EnvConfig::default();
-
-        let cfg = AppConfig::from_env_config(env);
-
-        assert!(!cfg.cors.enabled);
-    }
-
-    #[test]
     fn from_env_config_uses_defaults_when_optional_values_are_missing() {
-        let env = EnvConfig::default();
-
-        let cfg = AppConfig::from_env_config(env);
+        let cfg = AppConfig::from_env_config(EnvConfig::default());
 
         assert!(!cfg.enable_graphiql);
 
@@ -377,38 +266,41 @@ mod tests {
         assert_eq!(cfg.upload.image_dir, "images");
         assert_eq!(cfg.upload.file_dir, "files");
 
-        assert!(!cfg.cors.enabled);
-        assert_eq!(cfg.cors.env, "");
-        assert!(!cfg.cors.credentials);
-
         assert_eq!(cfg.http.max_body_bytes, 5 * 1024 * 1024);
 
-        assert!(!cfg.auth.is_enabled());
-        assert_eq!(cfg.auth.jwt_secret(), None);
-
         assert_eq!(cfg.html_path, "");
-
         assert!(cfg.mail.is_none());
+
+        assert!(!cfg.public_api.cors.enabled);
+        assert!(!cfg.public_api.enable_csrf);
+        assert!(!cfg.public_api.auth.is_enabled());
+
+        assert!(!cfg.admin_api.cors.enabled);
+        assert!(!cfg.admin_api.enable_csrf);
+        assert!(!cfg.admin_api.auth.is_enabled());
+
+        assert_eq!(
+            cfg.public_api.graphql_auth.jwt_cookie_name,
+            DEFAULT_PUBLIC_JWT_COOKIE_NAME
+        );
+
+        assert_eq!(
+            cfg.admin_api.graphql_auth.jwt_cookie_name,
+            DEFAULT_ADMIN_JWT_COOKIE_NAME
+        );
     }
 
     #[test]
-    fn from_env_config_overrides_all_fields() {
+    fn application_wide_fields_are_loaded() {
         let env = EnvConfig::from_iter([
             ("GRAPHIQL", "true"),
             ("UPLOAD_ROOT", "/data/uploads"),
             ("UPLOAD_IMAGE_DIR", "pics"),
             ("UPLOAD_FILE_DIR", "docs"),
-            ("CORS_ENABLED", "true"),
-            (
-                "CORS_ORIGINS",
-                "https://a.example.com,https://b.example.com",
-            ),
-            ("CORS_CREDENTIALS", "true"),
             ("IMAGE_MAX_WIDTH", "2048"),
             ("IMAGE_MAX_HEIGHT", "1536"),
             ("HTTP_MAX_BODY_BYTES", "3145728"),
             ("HTTP_MAX_BODY_MB", "99"),
-            ("JWT_SECRET", "test-secret"),
             ("HTML_PATH", "/tmp/index.html"),
         ]);
 
@@ -421,21 +313,206 @@ mod tests {
         assert_eq!(cfg.upload.image_dir, "pics");
         assert_eq!(cfg.upload.file_dir, "docs");
 
-        assert!(cfg.cors.enabled);
-
-        assert_eq!(cfg.cors.env, "https://a.example.com,https://b.example.com");
-
-        assert!(cfg.cors.credentials);
-
         assert_eq!(cfg.image.max_width, 2048);
         assert_eq!(cfg.image.max_height, 1536);
 
         assert_eq!(cfg.http.max_body_bytes, 3 * 1024 * 1024);
 
-        assert!(cfg.auth.is_enabled());
-        assert_eq!(cfg.auth.jwt_secret(), Some("test-secret"));
-
         assert_eq!(cfg.html_path, "/tmp/index.html");
+    }
+
+    #[test]
+    fn public_api_is_loaded_from_public_prefix() {
+        let env = EnvConfig::from_iter([
+            ("PUBLIC_CORS_ENABLED", "true"),
+            ("PUBLIC_CORS_ORIGINS", "https://public.example.com"),
+            ("PUBLIC_CORS_CREDENTIALS", "true"),
+            ("PUBLIC_CSRF_SECRET", "public-csrf-secret"),
+            ("PUBLIC_JWT_SECRET", "public-jwt-secret"),
+        ]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert!(cfg.public_api.cors.enabled);
+
+        assert_eq!(cfg.public_api.cors.env, "https://public.example.com");
+
+        assert!(cfg.public_api.cors.credentials);
+        assert!(cfg.public_api.enable_csrf);
+
+        assert!(cfg.public_api.auth.is_enabled());
+
+        assert_eq!(cfg.public_api.auth.jwt_secret(), Some("public-jwt-secret"));
+    }
+
+    #[test]
+    fn admin_api_is_loaded_from_admin_prefix() {
+        let env = EnvConfig::from_iter([
+            ("ADMIN_CORS_ENABLED", "true"),
+            ("ADMIN_CORS_ORIGINS", "https://admin.example.com"),
+            ("ADMIN_CORS_CREDENTIALS", "true"),
+            ("ADMIN_CSRF_SECRET", "admin-csrf-secret"),
+            ("ADMIN_JWT_SECRET", "admin-jwt-secret"),
+        ]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert!(cfg.admin_api.cors.enabled);
+
+        assert_eq!(cfg.admin_api.cors.env, "https://admin.example.com");
+
+        assert!(cfg.admin_api.cors.credentials);
+        assert!(cfg.admin_api.enable_csrf);
+
+        assert!(cfg.admin_api.auth.is_enabled());
+
+        assert_eq!(cfg.admin_api.auth.jwt_secret(), Some("admin-jwt-secret"));
+    }
+
+    #[test]
+    fn public_and_admin_api_configs_are_independent() {
+        let env = EnvConfig::from_iter([
+            ("PUBLIC_CORS_ENABLED", "true"),
+            ("PUBLIC_JWT_SECRET", "public-secret"),
+            ("PUBLIC_CSRF_SECRET", "public-csrf"),
+            ("ADMIN_CORS_ENABLED", "false"),
+            ("ADMIN_JWT_SECRET", "admin-secret"),
+        ]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert!(cfg.public_api.cors.enabled);
+        assert!(cfg.public_api.enable_csrf);
+
+        assert_eq!(cfg.public_api.auth.jwt_secret(), Some("public-secret"));
+
+        assert!(!cfg.admin_api.cors.enabled);
+        assert!(!cfg.admin_api.enable_csrf);
+
+        assert_eq!(cfg.admin_api.auth.jwt_secret(), Some("admin-secret"));
+    }
+
+    #[test]
+    fn unprefixed_api_settings_are_not_used() {
+        let env = EnvConfig::from_iter([
+            ("CORS_ENABLED", "true"),
+            ("CSRF_SECRET", "legacy-csrf-secret"),
+            ("JWT_SECRET", "legacy-jwt-secret"),
+        ]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert!(!cfg.public_api.cors.enabled);
+        assert!(!cfg.public_api.enable_csrf);
+        assert!(!cfg.public_api.auth.is_enabled());
+
+        assert!(!cfg.admin_api.cors.enabled);
+        assert!(!cfg.admin_api.enable_csrf);
+        assert!(!cfg.admin_api.auth.is_enabled());
+    }
+
+    #[test]
+    fn public_and_admin_cookie_names_use_defaults() {
+        let cfg = AppConfig::from_env_config(EnvConfig::default());
+
+        assert_eq!(cfg.public_api.graphql_auth.jwt_cookie_name, "public_token");
+
+        assert_eq!(cfg.admin_api.graphql_auth.jwt_cookie_name, "admin_token");
+    }
+
+    #[test]
+    fn public_and_admin_cookie_names_can_be_overridden() {
+        let env = EnvConfig::from_iter([
+            ("PUBLIC_JWT_COOKIE_NAME", "my_public_token"),
+            ("ADMIN_JWT_COOKIE_NAME", "my_admin_token"),
+        ]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert_eq!(
+            cfg.public_api.graphql_auth.jwt_cookie_name,
+            "my_public_token"
+        );
+
+        assert_eq!(cfg.admin_api.graphql_auth.jwt_cookie_name, "my_admin_token");
+    }
+
+    #[test]
+    fn empty_cookie_names_use_defaults() {
+        for value in ["", " ", "   ", "\t", "\n"] {
+            let env = EnvConfig::from_iter([
+                ("PUBLIC_JWT_COOKIE_NAME", value),
+                ("ADMIN_JWT_COOKIE_NAME", value),
+            ]);
+
+            let cfg = AppConfig::from_env_config(env);
+
+            assert_eq!(
+                cfg.public_api.graphql_auth.jwt_cookie_name,
+                DEFAULT_PUBLIC_JWT_COOKIE_NAME
+            );
+
+            assert_eq!(
+                cfg.admin_api.graphql_auth.jwt_cookie_name,
+                DEFAULT_ADMIN_JWT_COOKIE_NAME
+            );
+        }
+    }
+
+    #[test]
+    fn public_authentication_is_disabled_when_secret_is_empty() {
+        for secret in ["", " ", "   ", "\t", "\n"] {
+            let env = EnvConfig::from_iter([("PUBLIC_JWT_SECRET", secret)]);
+
+            let cfg = AppConfig::from_env_config(env);
+
+            assert!(
+                !cfg.public_api.auth.is_enabled(),
+                "Expected public authentication to be disabled for {secret:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn admin_authentication_is_disabled_when_secret_is_empty() {
+        for secret in ["", " ", "   ", "\t", "\n"] {
+            let env = EnvConfig::from_iter([("ADMIN_JWT_SECRET", secret)]);
+
+            let cfg = AppConfig::from_env_config(env);
+
+            assert!(
+                !cfg.admin_api.auth.is_enabled(),
+                "Expected admin authentication to be disabled for {secret:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_csrf_is_disabled_when_secret_is_empty() {
+        for secret in ["", " ", "   ", "\t", "\n"] {
+            let env = EnvConfig::from_iter([("PUBLIC_CSRF_SECRET", secret)]);
+
+            let cfg = AppConfig::from_env_config(env);
+
+            assert!(
+                !cfg.public_api.enable_csrf,
+                "Expected public CSRF to be disabled for {secret:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn admin_csrf_is_disabled_when_secret_is_empty() {
+        for secret in ["", " ", "   ", "\t", "\n"] {
+            let env = EnvConfig::from_iter([("ADMIN_CSRF_SECRET", secret)]);
+
+            let cfg = AppConfig::from_env_config(env);
+
+            assert!(
+                !cfg.admin_api.enable_csrf,
+                "Expected admin CSRF to be disabled for {secret:?}"
+            );
+        }
     }
 
     #[test]
@@ -461,41 +538,6 @@ mod tests {
         assert_eq!(cfg.image.max_height, 1280);
 
         assert_eq!(cfg.http.max_body_bytes, 5 * 1024 * 1024);
-    }
-
-    #[test]
-    fn authentication_is_disabled_when_jwt_secret_is_missing() {
-        let cfg = AppConfig::from_env_config(EnvConfig::default());
-
-        assert!(!cfg.auth.is_enabled());
-        assert_eq!(cfg.auth.jwt_secret(), None);
-    }
-
-    #[test]
-    fn authentication_is_disabled_when_jwt_secret_is_empty() {
-        for secret in ["", " ", "   ", "\t", "\n"] {
-            let env = EnvConfig::from_iter([("JWT_SECRET", secret)]);
-
-            let cfg = AppConfig::from_env_config(env);
-
-            assert!(
-                !cfg.auth.is_enabled(),
-                "Expected authentication to be disabled for {secret:?}"
-            );
-
-            assert_eq!(cfg.auth.jwt_secret(), None);
-        }
-    }
-
-    #[test]
-    fn authentication_is_enabled_when_jwt_secret_is_present() {
-        let env = EnvConfig::from_iter([("JWT_SECRET", "test-secret")]);
-
-        let cfg = AppConfig::from_env_config(env);
-
-        assert!(cfg.auth.is_enabled());
-
-        assert_eq!(cfg.auth.jwt_secret(), Some("test-secret"));
     }
 
     #[test]
@@ -618,35 +660,5 @@ mod tests {
         let cfg = AppConfig::from_env_config(env);
 
         assert!(!cfg.enable_graphiql);
-    }
-
-    #[test]
-    fn csrf_is_enabled_when_secret_is_present() {
-        let env = EnvConfig::from_iter([("CSRF_SECRET", "super-secret-key")]);
-
-        let cfg = AppConfig::from_env_config(env);
-
-        assert!(cfg.is_csrf_enabled());
-    }
-
-    #[test]
-    fn csrf_is_disabled_when_secret_is_missing() {
-        let cfg = AppConfig::from_env_config(EnvConfig::default());
-
-        assert!(!cfg.is_csrf_enabled());
-    }
-
-    #[test]
-    fn csrf_is_disabled_when_secret_is_empty() {
-        for secret in ["", " ", "   ", "\t", "\n"] {
-            let env = EnvConfig::from_iter([("CSRF_SECRET", secret)]);
-
-            let cfg = AppConfig::from_env_config(env);
-
-            assert!(
-                !cfg.is_csrf_enabled(),
-                "Expected CSRF to be disabled for {secret:?}"
-            );
-        }
     }
 }
