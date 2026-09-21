@@ -49,6 +49,8 @@
 //! assert!(cfg.cookie_http_only);
 //! ```
 
+use std::fmt;
+
 use rand::Rng;
 use sha2::{Digest, Sha256};
 
@@ -63,7 +65,7 @@ use crate::config::env::EnvConfig;
 /// - the current process environment with [`CsrfConfig::from_env`],
 /// - an [`EnvConfig`] snapshot with [`CsrfConfig::from_env_config`], or
 /// - a custom provider with [`CsrfConfig::from_env_with`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CsrfConfig {
     /// Secret key used for CSRF token signing.
     pub secret: [u8; 32],
@@ -159,6 +161,20 @@ impl CsrfConfig {
             cookie_secure,
             cookie_http_only,
         }
+    }
+}
+
+/// Provides a redacted debug representation of [`CsrfConfig`].
+///
+/// The CSRF signing secret must not be written to logs or other debug
+/// output. The secret is therefore always displayed as `[REDACTED]`.
+impl fmt::Debug for CsrfConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CsrfConfig")
+            .field("secret", &"[REDACTED]")
+            .field("cookie_secure", &self.cookie_secure)
+            .field("cookie_http_only", &self.cookie_http_only)
+            .finish()
     }
 }
 
@@ -419,5 +435,45 @@ mod tests {
                 "Expected random secrets for {value:?}"
             );
         }
+    }
+
+    #[test]
+    fn debug_redacts_csrf_secret() {
+        let env = EnvConfig::from_pairs([
+            ("CSRF_SECRET", "super-secret-csrf-value"),
+            ("CSRF_COOKIE_SECURE", "false"),
+            ("CSRF_COOKIE_HTTPONLY", "true"),
+        ]);
+
+        let cfg = CsrfConfig::from_env_config(&env);
+        let debug = format!("{cfg:?}");
+
+        assert!(debug.contains("CsrfConfig"));
+        assert!(debug.contains("[REDACTED]"));
+
+        assert!(!debug.contains("super-secret-csrf-value"));
+
+        assert!(debug.contains("cookie_secure"));
+        assert!(debug.contains("false"));
+
+        assert!(debug.contains("cookie_http_only"));
+        assert!(debug.contains("true"));
+    }
+
+    #[test]
+    fn debug_does_not_expose_derived_csrf_secret_bytes() {
+        let secret = derive_secret_from_string("super-secret-csrf-value");
+
+        let cfg = CsrfConfig {
+            secret,
+            cookie_secure: true,
+            cookie_http_only: true,
+        };
+
+        let debug = format!("{cfg:?}");
+
+        assert!(debug.contains("[REDACTED]"));
+
+        assert!(!debug.contains(&format!("{secret:?}")));
     }
 }

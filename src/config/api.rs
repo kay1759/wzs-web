@@ -215,4 +215,20 @@ mod tests {
 
         assert!(!debug.contains("super-secret-jwt-value"));
     }
+
+    #[test]
+    fn debug_output_does_not_expose_csrf_secret() {
+        let env = EnvConfig::from_pairs([("CSRF_SECRET", "super-secret-csrf-value")]);
+
+        let cfg = ApiConfig::from_env_config(&env, "auth_token");
+
+        let csrf_secret = cfg.csrf.secret;
+        let debug = format!("{cfg:?}");
+
+        assert!(debug.contains("ApiConfig"));
+        assert!(debug.contains("CsrfConfig"));
+        assert!(debug.contains("[REDACTED]"));
+
+        assert!(!debug.contains(&format!("{csrf_secret:?}")));
+    }
 }
