@@ -58,11 +58,11 @@
 
 use std::io::Cursor;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use exif::{In, Reader as ExifReader, Tag};
 use image::{
-    imageops::{self, FilterType},
     ColorType, DynamicImage, GenericImageView, ImageFormat, ImageReader, Rgba,
+    imageops::{self, FilterType},
 };
 
 use super::processor::{BgColor, ImageProcessor, ResizeMode, ResizeOpts};

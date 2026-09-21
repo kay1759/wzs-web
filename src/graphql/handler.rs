@@ -1,7 +1,7 @@
 use async_graphql::{ObjectType, Schema, SubscriptionType};
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
-use axum::http::HeaderMap;
 use axum::Extension;
+use axum::http::HeaderMap;
 use axum_extra::extract::cookie::CookieJar;
 
 use crate::auth::CurrentUser;
@@ -122,7 +122,7 @@ mod tests {
     use async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use axum::{routing::post, Extension, Router};
+    use axum::{Extension, Router, routing::post};
     use tower::ServiceExt;
 
     use super::*;
