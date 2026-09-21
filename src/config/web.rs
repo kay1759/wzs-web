@@ -1,7 +1,7 @@
-//! # HTTP and CORS Configuration
+//! # Web, HTTP, and CORS Configuration
 //!
-//! Defines configuration structures for HTTP request handling and
-//! CORS (Cross-Origin Resource Sharing) behavior.
+//! Defines configuration structures for web content, HTTP request handling,
+//! and CORS (Cross-Origin Resource Sharing) behavior.
 //!
 //! Configuration can be built from an [`EnvConfig`] environment snapshot.
 //! These structures are typically included within
@@ -9,6 +9,32 @@
 //! configuration layers.
 //!
 //! # Environment Variables
+//!
+//! ## Web Content
+//!
+//! - `WEB_ROOT` — root directory containing application web content
+//!
+//! `wzs-web` does not impose any directory structure below `WEB_ROOT`.
+//! Applications are free to organize their web content as needed.
+//!
+//! For example:
+//!
+//! ```text
+//! WEB_ROOT/
+//! ├── public/
+//! ├── admin/
+//! └── pickup/
+//! ```
+//!
+//! or:
+//!
+//! ```text
+//! WEB_ROOT/
+//! └── public/
+//!     ├── index.html
+//!     ├── admin/
+//!     └── pickup/
+//! ```
 //!
 //! ## HTTP
 //!
@@ -28,25 +54,65 @@
 //!
 //! ```rust
 //! use wzs_web::config::env::EnvConfig;
-//! use wzs_web::config::web::{CorsConfig, HttpConfig};
+//! use wzs_web::config::web::{CorsConfig, HttpConfig, WebConfig};
 //!
 //! let env = EnvConfig::from_pairs([
+//!     ("WEB_ROOT", "/var/www/app"),
 //!     ("HTTP_MAX_BODY_MB", "10"),
 //!     ("CORS_ENABLED", "true"),
 //!     ("CORS_ORIGINS", "http://localhost:5173"),
 //!     ("CORS_CREDENTIALS", "true"),
 //! ]);
 //!
+//! let web = WebConfig::from_env_config(&env);
 //! let http = HttpConfig::from_env_config(&env);
 //! let cors = CorsConfig::from_env_config(&env);
 //!
+//! assert_eq!(web.root, std::path::PathBuf::from("/var/www/app"));
 //! assert_eq!(http.max_body_bytes, 10 * 1024 * 1024);
 //! assert!(cors.enabled);
 //! assert_eq!(cors.env, "http://localhost:5173");
 //! assert!(cors.credentials);
 //! ```
 
+use std::path::PathBuf;
+
 use crate::config::env::EnvConfig;
+
+/// Web content configuration.
+///
+/// Defines the root directory containing application web content.
+///
+/// `wzs-web` does not impose any directory structure below this root.
+/// Applications are free to organize their web content as needed.
+///
+/// # Environment Variables
+///
+/// - `WEB_ROOT` — root directory containing web content
+#[derive(Clone, Debug, PartialEq)]
+pub struct WebConfig {
+    /// Root directory containing application web content.
+    pub root: PathBuf,
+}
+
+impl WebConfig {
+    /// Builds a [`WebConfig`] from an [`EnvConfig`] snapshot.
+    ///
+    /// If `WEB_ROOT` is missing or blank, the root defaults to the current
+    /// directory (`.`).
+    ///
+    /// No assumptions are made about the directory structure below
+    /// this root.
+    pub fn from_env_config(env: &EnvConfig) -> Self {
+        let root = env
+            .get_string("WEB_ROOT")
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        Self { root }
+    }
+}
 
 /// Default maximum HTTP request body size in megabytes.
 const DEFAULT_MAX_BODY_MB: usize = 5;
@@ -208,6 +274,52 @@ fn is_truthy(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_config_uses_current_directory_by_default() {
+        let env = EnvConfig::default();
+
+        let cfg = WebConfig::from_env_config(&env);
+
+        assert_eq!(cfg.root, PathBuf::from("."));
+    }
+
+    #[test]
+    fn web_config_reads_web_root() {
+        let env = EnvConfig::from_pairs([("WEB_ROOT", "/var/www/afsch")]);
+
+        let cfg = WebConfig::from_env_config(&env);
+
+        assert_eq!(cfg.root, PathBuf::from("/var/www/afsch"));
+    }
+
+    #[test]
+    fn web_config_blank_web_root_uses_default() {
+        for value in ["", "   "] {
+            let env = EnvConfig::from_pairs([("WEB_ROOT", value)]);
+
+            let cfg = WebConfig::from_env_config(&env);
+
+            assert_eq!(cfg.root, PathBuf::from("."));
+        }
+    }
+
+    #[test]
+    fn web_config_does_not_assume_application_directory_structure() {
+        let env = EnvConfig::from_pairs([("WEB_ROOT", "/var/www/afsch")]);
+
+        let cfg = WebConfig::from_env_config(&env);
+
+        assert_eq!(
+            cfg.root.join("public").join("admin").join("index.html"),
+            PathBuf::from("/var/www/afsch/public/admin/index.html")
+        );
+
+        assert_eq!(
+            cfg.root.join("admin").join("index.html"),
+            PathBuf::from("/var/www/afsch/admin/index.html")
+        );
+    }
 
     #[test]
     fn http_config_holds_value() {

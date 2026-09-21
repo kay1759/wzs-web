@@ -4,6 +4,149 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-09-22
+
+### Added
+
+* Added `WebConfig` for application-wide web root configuration through
+  `WEB_ROOT`.
+* Added `ApiConfig::from_prefixed_env()` for constructing API configuration
+  from arbitrary application-defined environment-variable prefixes.
+* Added support for overriding the GraphQL JWT cookie name through the scoped
+  `JWT_COOKIE_NAME` environment variable.
+* Added generic SPA entry handling based on `ApiConfig`.
+
+### Changed
+
+* Changed `AppConfig` so it no longer defines a fixed set of API entry points.
+  Applications now construct the `ApiConfig` instances they require from the
+  shared `EnvConfig` snapshot.
+* Changed API configuration from predefined public and administrative APIs to
+  application-defined API prefixes.
+* Changed web configuration from a single HTML file path to a generic
+  `WEB_ROOT`.
+* Changed `spa_entry_handler` to receive `ApiConfig` instead of receiving
+  `CsrfConfig` directly.
+* Changed SPA CSRF handling to obtain CSRF configuration through
+  `ApiConfig`.
+* Unified GraphQL and SPA configuration injection around `ApiConfig`.
+* Kept SPA naming, URL namespaces, filesystem layout, and API-to-SPA mapping
+  as application-level concerns rather than library-level configuration.
+
+### Removed
+
+* Removed `HTML_PATH` configuration.
+* Removed `html_path` from `AppConfig`.
+* Removed predefined `public_api` and `admin_api` fields from `AppConfig`.
+* Removed the requirement to inject `CsrfConfig` separately into the generic
+  SPA entry handler.
+
+### Breaking Changes
+
+* `AppConfig` no longer exposes `public_api` or `admin_api`.
+* Applications must explicitly construct API configurations using
+  `ApiConfig::from_prefixed_env()` or another `ApiConfig` constructor.
+* `HTML_PATH` is no longer supported. Applications should configure
+  `WEB_ROOT` instead.
+* `spa_entry_handler` now requires an Axum `Extension<ApiConfig>` instead of
+  `Extension<CsrfConfig>`.
+
+### Migration Notes
+
+Applications that previously accessed API configuration through:
+
+```rust
+let cfg = AppConfig::from_env();
+
+let public_api = &cfg.public_api;
+let admin_api = &cfg.admin_api;
+```
+
+should explicitly construct the required configurations:
+
+```rust
+use wzs_web::config::api::ApiConfig;
+use wzs_web::config::app::AppConfig;
+
+let cfg = AppConfig::from_env();
+
+let public_api =
+    ApiConfig::from_prefixed_env(
+        &cfg.env,
+        "PUBLIC_",
+        "public_token",
+    );
+
+let admin_api =
+    ApiConfig::from_prefixed_env(
+        &cfg.env,
+        "ADMIN_",
+        "admin_token",
+    );
+```
+
+Applications are not limited to these prefixes. For example:
+
+```rust
+let pickup_api =
+    ApiConfig::from_prefixed_env(
+        &cfg.env,
+        "PICKUP_",
+        "pickup_token",
+    );
+```
+
+Configuration that previously used:
+
+```text
+HTML_PATH=/path/to/frontend/index.html
+```
+
+should be changed to the application web root:
+
+```text
+WEB_ROOT=/path/to/frontend
+```
+
+The application is responsible for selecting files and directories below
+`WEB_ROOT`.
+
+For example, an application may use:
+
+```text
+WEB_ROOT/
+├── members/
+│   └── index.html
+├── admin/
+│   └── index.html
+└── pickup/
+    └── index.html
+```
+
+but this layout is not imposed by `wzs-web`.
+
+SPA routers that previously injected CSRF configuration separately:
+
+```rust
+Router::new()
+    .route("/", get(spa_entry_handler))
+    .layer(Extension(html))
+    .layer(Extension(csrf_config))
+```
+
+should now inject the API configuration:
+
+```rust
+Router::new()
+    .route("/", get(spa_entry_handler))
+    .layer(Extension(html))
+    .layer(Extension(api_config))
+```
+
+`spa_entry_handler` obtains its CSRF configuration from `ApiConfig`.
+
+---
+
 ## [0.2.0] - 2026-09-21
 
 ### Added
@@ -101,4 +244,3 @@ Application-specific environment variables remain available through:
 
 ```rust
 cfg.env
-```

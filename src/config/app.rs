@@ -10,6 +10,10 @@
 //! [`AppConfig`]. Applications may create any number of API configurations
 //! from [`AppConfig::env`] using `ApiConfig`.
 //!
+//! Web content configuration is represented by [`WebConfig`]. `wzs-web`
+//! defines only the web content root and does not impose any application-
+//! specific directory structure below that root.
+//!
 //! For non-production environments, `.env` files are loaded before the
 //! snapshot is created.
 //!
@@ -28,8 +32,12 @@
 use std::env;
 
 use crate::config::{
-    db::DbConfig, env::EnvConfig, image::ImageConfig, mail::MailConfig, upload::UploadConfig,
-    web::HttpConfig,
+    db::DbConfig,
+    env::EnvConfig,
+    image::ImageConfig,
+    mail::MailConfig,
+    upload::UploadConfig,
+    web::{HttpConfig, WebConfig},
 };
 
 /// Top-level application configuration.
@@ -39,6 +47,9 @@ use crate::config::{
 ///
 /// API configuration is deliberately not stored here. Applications can create
 /// any number of independent `ApiConfig` values from [`AppConfig::env`].
+///
+/// Web content is represented only by a root directory. Applications decide
+/// how content is organized below that root.
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     /// Snapshot of all environment variables captured at startup.
@@ -53,6 +64,11 @@ pub struct AppConfig {
     /// HTTP server configuration shared by the application.
     pub http: HttpConfig,
 
+    /// Web content root configuration.
+    ///
+    /// No assumptions are made about the directory structure below this root.
+    pub web: WebConfig,
+
     /// Image processing configuration.
     pub image: ImageConfig,
 
@@ -64,14 +80,6 @@ pub struct AppConfig {
 
     /// Whether the GraphiQL IDE is enabled.
     pub enable_graphiql: bool,
-
-    /// Path to the HTML template file.
-    ///
-    /// Empty when `HTML_PATH` is not configured.
-    ///
-    /// This field retains the existing `HTML_PATH` behavior for backward
-    /// compatibility.
-    pub html_path: String,
 }
 
 impl AppConfig {
@@ -103,9 +111,13 @@ impl AppConfig {
     /// API-specific configuration is not constructed here. The complete
     /// environment snapshot remains available through [`AppConfig::env`] so
     /// applications can construct any number of independently configured APIs.
+    ///
+    /// Web content configuration contains only `WEB_ROOT`. Applications are
+    /// responsible for deciding the directory structure below that root.
     pub fn from_env_config(env: EnvConfig) -> Self {
         let db = DbConfig::from_env_config(&env);
         let http = HttpConfig::from_env_config(&env);
+        let web = WebConfig::from_env_config(&env);
         let image = ImageConfig::from_env_config(&env);
         let upload = UploadConfig::from_env_config(&env);
 
@@ -117,17 +129,15 @@ impl AppConfig {
 
         let enable_graphiql = read_flag(&env, "GRAPHIQL", false);
 
-        let html_path = env.get_string("HTML_PATH").unwrap_or_default();
-
         Self {
             env,
             db,
             http,
+            web,
             image,
             upload,
             mail,
             enable_graphiql,
-            html_path,
         }
     }
 }
@@ -221,9 +231,7 @@ mod tests {
         let cfg = AppConfig::from_env_config(env);
 
         assert_eq!(cfg.env.get("PUBLIC_JWT_SECRET"), Some("public-secret"));
-
         assert_eq!(cfg.env.get("ADMIN_JWT_SECRET"), Some("admin-secret"));
-
         assert_eq!(cfg.env.get("PICKUP_JWT_SECRET"), Some("pickup-secret"));
     }
 
@@ -232,6 +240,8 @@ mod tests {
         let cfg = AppConfig::from_env_config(EnvConfig::default());
 
         assert!(!cfg.enable_graphiql);
+
+        assert_eq!(cfg.web.root, PathBuf::from("."));
 
         assert_eq!(cfg.image.max_width, 1280);
         assert_eq!(cfg.image.max_height, 1280);
@@ -242,7 +252,6 @@ mod tests {
 
         assert_eq!(cfg.http.max_body_bytes, 5 * 1024 * 1024);
 
-        assert_eq!(cfg.html_path, "");
         assert!(cfg.mail.is_none());
     }
 
@@ -250,6 +259,7 @@ mod tests {
     fn application_wide_fields_are_loaded() {
         let env = EnvConfig::from_pairs([
             ("GRAPHIQL", "true"),
+            ("WEB_ROOT", "/var/www/afsch"),
             ("UPLOAD_ROOT", "/data/uploads"),
             ("UPLOAD_IMAGE_DIR", "pics"),
             ("UPLOAD_FILE_DIR", "docs"),
@@ -257,12 +267,13 @@ mod tests {
             ("IMAGE_MAX_HEIGHT", "1536"),
             ("HTTP_MAX_BODY_BYTES", "3145728"),
             ("HTTP_MAX_BODY_MB", "99"),
-            ("HTML_PATH", "/tmp/index.html"),
         ]);
 
         let cfg = AppConfig::from_env_config(env);
 
         assert!(cfg.enable_graphiql);
+
+        assert_eq!(cfg.web.root, PathBuf::from("/var/www/afsch"));
 
         assert_eq!(cfg.upload.root, PathBuf::from("/data/uploads"));
         assert_eq!(cfg.upload.image_dir, "pics");
@@ -272,8 +283,32 @@ mod tests {
         assert_eq!(cfg.image.max_height, 1536);
 
         assert_eq!(cfg.http.max_body_bytes, 3 * 1024 * 1024);
+    }
 
-        assert_eq!(cfg.html_path, "/tmp/index.html");
+    #[test]
+    fn web_root_is_loaded_from_env_config() {
+        let env = EnvConfig::from_pairs([("WEB_ROOT", "/srv/example/web")]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert_eq!(cfg.web.root, PathBuf::from("/srv/example/web"));
+    }
+
+    #[test]
+    fn web_root_does_not_impose_application_structure() {
+        let env = EnvConfig::from_pairs([("WEB_ROOT", "/srv/example/web")]);
+
+        let cfg = AppConfig::from_env_config(env);
+
+        assert_eq!(
+            cfg.web.root.join("public").join("index.html"),
+            PathBuf::from("/srv/example/web/public/index.html")
+        );
+
+        assert_eq!(
+            cfg.web.root.join("public").join("admin").join("index.html"),
+            PathBuf::from("/srv/example/web/public/admin/index.html")
+        );
     }
 
     #[test]
@@ -299,22 +334,6 @@ mod tests {
         assert_eq!(cfg.image.max_height, 1280);
 
         assert_eq!(cfg.http.max_body_bytes, 5 * 1024 * 1024);
-    }
-
-    #[test]
-    fn html_path_defaults_to_empty() {
-        let cfg = AppConfig::from_env_config(EnvConfig::default());
-
-        assert_eq!(cfg.html_path, "");
-    }
-
-    #[test]
-    fn html_path_is_loaded_from_env_config() {
-        let env = EnvConfig::from_pairs([("HTML_PATH", "/tmp/index.html")]);
-
-        let cfg = AppConfig::from_env_config(env);
-
-        assert_eq!(cfg.html_path, "/tmp/index.html");
     }
 
     #[test]

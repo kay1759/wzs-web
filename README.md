@@ -6,18 +6,24 @@ environment-based configuration.
 
 `wzs-web` provides configuration management, database abstractions,
 GraphQL helpers, JWT authentication support, CSRF/CORS utilities,
-email infrastructure, image processing, file uploads, and other common
-web application components.
+SPA helpers, email infrastructure, image processing, file uploads,
+and other common web application components.
 
 ## Features
 
-* **Unified Configuration (`AppConfig`)**
-  Captures the process environment once and builds typed configuration
-  from a shared immutable `EnvConfig` snapshot.
+* **Unified Application Configuration (`AppConfig`)**
+  Captures the process environment once and builds application-wide typed
+  configuration from a shared immutable `EnvConfig` snapshot.
 
-* **Multiple API Configurations (`ApiConfig`)**
-  Public and administrative APIs can independently configure CORS,
-  CSRF, JWT authentication, and GraphQL authentication cookies.
+* **Application-Defined API Configurations (`ApiConfig`)**
+  Applications can construct any number of API configurations using
+  arbitrary environment-variable prefixes. Each API can independently
+  configure CORS, CSRF, JWT authentication, and GraphQL authentication
+  cookies.
+
+* **Web Root Configuration (`WebConfig`)**
+  `WEB_ROOT` defines the application's web root without imposing any
+  application-specific frontend or SPA directory layout.
 
 * **Optional JWT Authentication**
   JWT authentication is enabled only when a non-empty JWT secret is
@@ -26,7 +32,8 @@ web application components.
 
 * **Environment Snapshot (`EnvConfig`)**
   All environment variables are preserved, including application-specific
-  variables not interpreted directly by `wzs-web`.
+  variables not interpreted directly by `wzs-web`. Scoped environment
+  views can be created with `EnvConfig::with_prefix()`.
 
 * **Database Layer**
   Reusable MySQL connection helpers and a generic `Db` abstraction with
@@ -34,7 +41,12 @@ web application components.
 
 * **GraphQL Infrastructure**
   Helpers for Async-GraphQL/Axum integration, authentication context, and
-  CSRF validation.
+  CSRF validation. GraphQL request handling uses `ApiConfig`.
+
+* **SPA Infrastructure**
+  A generic SPA entry handler that injects CSRF tokens and uses `ApiConfig`
+  without making assumptions about application-specific SPA names,
+  routes, or directory layouts.
 
 * **Notification / Email Infrastructure**
   SMTP-based email delivery using a port/adapter design.
@@ -52,13 +64,15 @@ web application components.
 
 ## Configuration Architecture
 
-`AppConfig::from_env()` loads configuration in the following order:
+`AppConfig::from_env()` loads application-wide configuration in the
+following order:
 
 1. Read `APP_ENV`.
 2. Load a dotenv file when not running in production.
 3. Capture the complete process environment into `EnvConfig`.
-4. Build application-wide configuration from that snapshot.
-5. Build independent public and administrative API configurations.
+4. Build application-wide typed configuration from that snapshot.
+5. Preserve the complete `EnvConfig` so applications can construct their
+   own API-specific and application-specific configuration.
 
 The resulting structure is conceptually:
 
@@ -67,46 +81,42 @@ AppConfig
 ├── env
 ├── db
 ├── http
+├── web
+│   └── root
 ├── image
 ├── upload
 ├── mail
-├── public_api
-│   ├── cors
-│   ├── csrf
-│   ├── auth
-│   └── graphql_auth
-├── admin_api
-│   ├── cors
-│   ├── csrf
-│   ├── auth
-│   └── graphql_auth
-├── enable_graphiql
-└── html_path
+└── enable_graphiql
 ```
 
-Application-wide configuration uses ordinary environment variables such as
-`DATABASE_URL`, `HTTP_MAX_BODY_MB`, and `SMTP_HOST`.
-
-API-specific configuration uses separate prefixes:
+API configuration is deliberately separate from `AppConfig`:
 
 ```text
-PUBLIC_*
-ADMIN_*
+EnvConfig
+   │
+   ├── prefix "PUBLIC_" ──> ApiConfig
+   │                        ├── cors
+   │                        ├── csrf
+   │                        ├── auth
+   │                        └── graphql_auth
+   │
+   ├── prefix "ADMIN_" ───> ApiConfig
+   │                        ├── cors
+   │                        ├── csrf
+   │                        ├── auth
+   │                        └── graphql_auth
+   │
+   └── any other prefix ──> ApiConfig
+                            ├── cors
+                            ├── csrf
+                            ├── auth
+                            └── graphql_auth
 ```
 
-For example:
+This separation keeps `wzs-web` application-agnostic.
 
-```text
-PUBLIC_JWT_SECRET
-PUBLIC_CSRF_SECRET
-PUBLIC_CORS_ENABLED
-
-ADMIN_JWT_SECRET
-ADMIN_CSRF_SECRET
-ADMIN_CORS_ENABLED
-```
-
-Internally, the prefix is removed before constructing each `ApiConfig`.
+The library does not decide how many APIs an application has or what those
+APIs are called.
 
 ## Environment Snapshot
 
@@ -130,6 +140,38 @@ let reservation_max_days = cfg.env.get_u32("RESERVATION_MAX_DAYS");
 
 This allows applications to keep their own settings in the same environment
 without requiring every variable to be represented by `wzs-web`.
+
+### Scoped environment configuration
+
+`EnvConfig::with_prefix()` creates a new environment snapshot containing
+only variables with the specified prefix, with that prefix removed.
+
+For example:
+
+```text
+PUBLIC_JWT_SECRET=secret
+PUBLIC_CORS_ENABLED=true
+OTHER_VALUE=ignored
+```
+
+can be scoped with:
+
+```rust
+let public_env = cfg.env.with_prefix("PUBLIC_");
+```
+
+The resulting configuration contains:
+
+```text
+JWT_SECRET=secret
+CORS_ENABLED=true
+```
+
+The original `EnvConfig` is unchanged.
+
+Normally applications do not need to call `with_prefix()` directly when
+constructing an `ApiConfig`, because `ApiConfig::from_prefixed_env()` performs
+this operation internally.
 
 ## Dotenv Loading
 
@@ -192,67 +234,244 @@ fn main() {
 }
 ```
 
-## Public and Admin APIs
+## API Configuration
 
-`AppConfig` contains two independent API configurations:
+`wzs-web` does not define fixed public or administrative APIs.
+
+Instead, applications construct the API configurations they require from
+the shared environment snapshot.
+
+For example:
+
+```rust
+use wzs_web::config::api::ApiConfig;
+use wzs_web::config::app::AppConfig;
+
+let cfg = AppConfig::from_env();
+
+let public_api =
+    ApiConfig::from_prefixed_env(
+        &cfg.env,
+        "PUBLIC_",
+        "public_token",
+    );
+
+let admin_api =
+    ApiConfig::from_prefixed_env(
+        &cfg.env,
+        "ADMIN_",
+        "admin_token",
+    );
+
+let pickup_api =
+    ApiConfig::from_prefixed_env(
+        &cfg.env,
+        "PICKUP_",
+        "pickup_token",
+    );
+```
+
+The prefixes and default cookie names are application decisions.
+
+An application could equally use:
+
+```rust
+let customer_api =
+    ApiConfig::from_prefixed_env(
+        &cfg.env,
+        "CUSTOMER_",
+        "customer_token",
+    );
+
+let staff_api =
+    ApiConfig::from_prefixed_env(
+        &cfg.env,
+        "STAFF_",
+        "staff_token",
+    );
+```
+
+`wzs-web` does not automatically discover prefixes. Applications explicitly
+construct the API configurations they need.
+
+This makes it possible for one application to expose multiple API entry
+points with different security policies, for example:
+
+```text
+/api/public/graphql
+/api/admin/graphql
+/api/pickup/graphql
+```
+
+Each API can use different CORS origins, CSRF secrets, JWT secrets, and
+authentication cookie names.
+
+## Web Root and SPA Layout
+
+Application-wide web configuration uses:
+
+```text
+WEB_ROOT=/path/to/web/root
+```
+
+It is available through:
 
 ```rust
 let cfg = AppConfig::from_env();
 
-let public_api = &cfg.public_api;
-let admin_api = &cfg.admin_api;
+let web_root = &cfg.web.root;
 ```
 
-This makes it possible for one application to expose API entry points with
-different security policies, for example:
+`wzs-web` deliberately does not impose an SPA directory structure.
+
+For example, an application may choose:
 
 ```text
-/public/graphql
-/admin/graphql
+WEB_ROOT/
+├── members/
+│   ├── index.html
+│   └── assets/
+├── admin/
+│   ├── index.html
+│   └── assets/
+└── pickup/
+    ├── index.html
+    └── assets/
 ```
 
-The two APIs can use different CORS origins, CSRF secrets, JWT secrets, and
-authentication cookie names.
+Another application may use an entirely different structure.
+
+The application is responsible for deciding:
+
+* SPA names
+* URL namespaces
+* frontend build directories
+* static asset directories
+* which `ApiConfig` belongs to each SPA
+
+`wzs-web` provides the reusable handler and configuration primitives rather
+than defining application composition.
+
+## SPA Entry Handler
+
+`spa_entry_handler` provides generic SPA entry-page handling with CSRF token
+generation.
+
+It requires two Axum extensions:
+
+```text
+ApiConfig
+Arc<String>
+```
+
+The `Arc<String>` contains the preloaded SPA entry HTML.
+
+The HTML may contain:
+
+```text
+{{ csrf_token }}
+```
+
+The handler:
+
+1. obtains CSRF configuration from `ApiConfig`,
+2. generates a CSRF token,
+3. stores the token in the CSRF cookie, and
+4. replaces `{{ csrf_token }}` in the HTML.
+
+A simplified router can be constructed as:
+
+```rust
+use std::sync::Arc;
+
+use axum::{
+    routing::get,
+    Extension,
+    Router,
+};
+
+use wzs_web::config::api::ApiConfig;
+use wzs_web::web::spa::entry::spa_entry_handler;
+
+fn build_spa_router(
+    html: Arc<String>,
+    api_config: ApiConfig,
+) -> Router {
+    Router::new()
+        .route("/", get(spa_entry_handler))
+        .fallback(spa_entry_handler)
+        .layer(Extension(html))
+        .layer(Extension(api_config))
+}
+```
+
+The handler does not know whether the SPA represents members,
+administrators, pickup terminals, or any other application concept.
 
 ## JWT Authentication
 
-JWT authentication is optional.
+JWT authentication is optional for each `ApiConfig`.
 
-For the public API:
+For an API constructed with:
+
+```rust
+ApiConfig::from_prefixed_env(
+    &cfg.env,
+    "PUBLIC_",
+    "public_token",
+)
+```
+
+JWT configuration can be supplied as:
 
 ```text
 PUBLIC_JWT_SECRET=public-secret
 ```
 
-For the administrative API:
-
-```text
-ADMIN_JWT_SECRET=admin-secret
-```
-
 A missing, empty, or whitespace-only JWT secret disables authentication for
 that API.
 
-This means an application can start without JWT configuration when
+This allows an application to start without JWT configuration when
 authentication is not required, such as during frontend development or tests.
 
-Default GraphQL JWT cookie names are:
+The default JWT cookie name is supplied by the application when constructing
+the `ApiConfig`:
 
-```text
-public API: public_token
-admin API:  admin_token
+```rust
+let public_api =
+    ApiConfig::from_prefixed_env(
+        &cfg.env,
+        "PUBLIC_",
+        "public_token",
+    );
 ```
 
-They can be overridden with:
+It can be overridden by the scoped environment variable:
 
 ```text
 PUBLIC_JWT_COOKIE_NAME=my_public_token
+```
+
+For another prefix:
+
+```rust
+let admin_api =
+    ApiConfig::from_prefixed_env(
+        &cfg.env,
+        "ADMIN_",
+        "admin_token",
+    );
+```
+
+the corresponding override is:
+
+```text
 ADMIN_JWT_COOKIE_NAME=my_admin_token
 ```
 
 ## CSRF
 
-CSRF protection is configured independently for each API.
+CSRF protection is configured independently for each `ApiConfig`.
 
 For example:
 
@@ -260,14 +479,18 @@ For example:
 PUBLIC_CSRF_SECRET=public-csrf-secret
 PUBLIC_CSRF_COOKIE_SECURE=true
 PUBLIC_CSRF_COOKIE_HTTPONLY=true
+```
 
+or:
+
+```text
 ADMIN_CSRF_SECRET=admin-csrf-secret
 ADMIN_CSRF_COOKIE_SECURE=true
 ADMIN_CSRF_COOKIE_HTTPONLY=true
 ```
 
-CSRF protection for an API is enabled only when its `CSRF_SECRET` contains a
-non-empty value.
+CSRF protection for an API is enabled only when its scoped `CSRF_SECRET`
+contains a non-empty value.
 
 `CSRF_COOKIE_SECURE` and `CSRF_COOKIE_HTTPONLY` both default to `true`.
 
@@ -275,11 +498,19 @@ non-empty value.
 `CSRF_SECRET` is supplied, a random secret is generated, but `ApiConfig`
 still considers CSRF protection disabled.
 
+The same mechanism works with arbitrary application-defined prefixes:
+
+```text
+PICKUP_CSRF_SECRET=pickup-csrf-secret
+PICKUP_CSRF_COOKIE_SECURE=true
+PICKUP_CSRF_COOKIE_HTTPONLY=true
+```
+
 ## CORS
 
-CORS is also configured independently for the public and administrative APIs.
+CORS is configured independently for each `ApiConfig`.
 
-Example:
+For example:
 
 ```text
 PUBLIC_CORS_ENABLED=true
@@ -293,6 +524,8 @@ ADMIN_CORS_CREDENTIALS=true
 
 CORS is disabled by default.
 
+The same suffixes can be used with any application-defined API prefix.
+
 ## Environment Variables
 
 ### Application-wide
@@ -305,16 +538,19 @@ CORS is disabled by default.
 | `DATABASE_MAX_CONN`   | Optional maximum DB connections               | unset           |
 | `HTTP_MAX_BODY_BYTES` | Maximum HTTP body size in bytes               | see below       |
 | `HTTP_MAX_BODY_MB`    | Maximum HTTP body size in MiB                 | `5`             |
+| `WEB_ROOT`            | Application web root                          | `.`             |
 | `UPLOAD_ROOT`         | Upload root used by environment configuration | `./var/uploads` |
 | `UPLOAD_IMAGE_DIR`    | Image upload subdirectory                     | `images`        |
 | `UPLOAD_FILE_DIR`     | General file upload subdirectory              | `files`         |
 | `IMAGE_MAX_WIDTH`     | Maximum configured image width                | `1280`          |
 | `IMAGE_MAX_HEIGHT`    | Maximum configured image height               | `1280`          |
-| `GRAPHIQL`            | Enable GraphiQL                               | `false`         |
-| `HTML_PATH`           | HTML template path                            | empty           |
+| `GRAPHIQL`            | Enable GraphiQL                                | `false`         |
 
 `HTTP_MAX_BODY_BYTES` takes precedence over `HTTP_MAX_BODY_MB`.
 If neither contains a valid value, the limit is 5 MiB.
+
+`WEB_ROOT` specifies only the generic application web root. The library does
+not define frontend names or subdirectories below that root.
 
 Note that `UploadConfig::default()` retains `./uploads` for backward
 compatibility, while environment-based configuration through
@@ -323,18 +559,35 @@ compatibility, while environment-based configuration through
 
 ### API-specific
 
-Each variable below can use either the `PUBLIC_` or `ADMIN_` prefix.
+API-specific variables use an application-selected prefix followed by one of
+the suffixes below.
 
-| Variable suffix        | Description                                        | Default                        |
-| ---------------------- | -------------------------------------------------- | ------------------------------ |
-| `CORS_ENABLED`         | Enable CORS                                        | `false`                        |
-| `CORS_ORIGINS`         | Allowed origins                                    | empty                          |
-| `CORS_CREDENTIALS`     | Allow credentialed CORS requests                   | `false`                        |
-| `CSRF_SECRET`          | CSRF signing secret; non-empty value enables CSRF  | unset / disabled               |
-| `CSRF_COOKIE_SECURE`   | Set `Secure` on the CSRF cookie                    | `true`                         |
-| `CSRF_COOKIE_HTTPONLY` | Set `HttpOnly` on the CSRF cookie                  | `true`                         |
-| `JWT_SECRET`           | JWT secret; non-empty value enables authentication | unset / disabled               |
-| `JWT_COOKIE_NAME`      | GraphQL JWT cookie name                            | `public_token` / `admin_token` |
+For example, with the prefix `PUBLIC_`:
+
+```text
+PUBLIC_CORS_ENABLED
+PUBLIC_CSRF_SECRET
+PUBLIC_JWT_SECRET
+```
+
+With `PICKUP_`:
+
+```text
+PICKUP_CORS_ENABLED
+PICKUP_CSRF_SECRET
+PICKUP_JWT_SECRET
+```
+
+| Variable suffix        | Description                                        | Default                         |
+| ---------------------- | -------------------------------------------------- | ------------------------------- |
+| `CORS_ENABLED`         | Enable CORS                                        | `false`                         |
+| `CORS_ORIGINS`         | Allowed origins                                    | empty                           |
+| `CORS_CREDENTIALS`     | Allow credentialed CORS requests                   | `false`                         |
+| `CSRF_SECRET`          | CSRF signing secret; non-empty value enables CSRF  | unset / disabled                |
+| `CSRF_COOKIE_SECURE`   | Set `Secure` on the CSRF cookie                    | `true`                          |
+| `CSRF_COOKIE_HTTPONLY` | Set `HttpOnly` on the CSRF cookie                  | `true`                          |
+| `JWT_SECRET`           | JWT secret; non-empty value enables authentication | unset / disabled                |
+| `JWT_COOKIE_NAME`      | GraphQL JWT cookie name                            | application-provided default    |
 
 For example:
 
@@ -345,27 +598,25 @@ PUBLIC_CORS_CREDENTIALS=true
 PUBLIC_CSRF_SECRET=development-csrf-secret
 PUBLIC_CSRF_COOKIE_SECURE=false
 PUBLIC_JWT_SECRET=development-jwt-secret
-
-ADMIN_CORS_ENABLED=true
-ADMIN_CORS_ORIGINS=https://admin.example.com
-ADMIN_CORS_CREDENTIALS=true
-ADMIN_CSRF_SECRET=admin-csrf-secret
-ADMIN_JWT_SECRET=admin-jwt-secret
+PUBLIC_JWT_COOKIE_NAME=public_token
 ```
+
+Applications may construct additional configurations using any prefix they
+choose.
 
 ## Mail / SMTP
 
 Mail configuration is application-wide.
 
-| Variable          | Description                             | Default                          |
-| ----------------- | --------------------------------------- | -------------------------------- |
-| `SMTP_HOST`       | SMTP server hostname                    | unset                            |
+| Variable          | Description                             | Default                           |
+| ----------------- | --------------------------------------- | --------------------------------- |
+| `SMTP_HOST`       | SMTP server hostname                    | unset                             |
 | `SMTP_PORT`       | SMTP server port                        | required when mail is configured |
 | `SMTP_USERNAME`   | SMTP username                           | required when mail is configured |
 | `SMTP_PASSWORD`   | SMTP password                           | required when mail is configured |
 | `SMTP_FROM_EMAIL` | Sender email address                    | required when mail is configured |
-| `SMTP_FROM_NAME`  | Sender display name                     | `Notifier`                       |
-| `NOTIFY_TO_EMAIL` | Comma-separated notification recipients | empty                            |
+| `SMTP_FROM_NAME`  | Sender display name                     | `Notifier`                        |
+| `NOTIFY_TO_EMAIL` | Comma-separated notification recipients | empty                             |
 
 When `AppConfig` is used, mail configuration is absent when `SMTP_HOST` is not
 configured.
