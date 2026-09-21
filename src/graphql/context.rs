@@ -1,8 +1,8 @@
 use axum::http::HeaderMap;
 use axum_extra::extract::cookie::CookieJar;
 
-use crate::auth::jwt::decode_jwt;
 use crate::auth::CurrentUser;
+use crate::auth::jwt::decode_jwt;
 
 /// Extract an authenticated principal (`CurrentUser`) from a JWT stored in a cookie.
 ///

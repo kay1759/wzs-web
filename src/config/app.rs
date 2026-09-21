@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn from_env_config_includes_db_config() {
-        let env = EnvConfig::from_iter([("DATABASE_URL", "mysql://root:pass@localhost/db")]);
+        let env = EnvConfig::from_pairs([("DATABASE_URL", "mysql://root:pass@localhost/db")]);
 
         let cfg = AppConfig::from_env_config(env);
 
@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn from_env_config_preserves_unknown_variables() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("DATABASE_URL", "mysql://localhost/db"),
             ("BCRYPT_COST", "4"),
             ("PUBLIC_WEB_BASE_URL", "http://localhost:5173"),
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn application_wide_fields_are_loaded() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("GRAPHIQL", "true"),
             ("UPLOAD_ROOT", "/data/uploads"),
             ("UPLOAD_IMAGE_DIR", "pics"),
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn public_api_is_loaded_from_public_prefix() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("PUBLIC_CORS_ENABLED", "true"),
             ("PUBLIC_CORS_ORIGINS", "https://public.example.com"),
             ("PUBLIC_CORS_CREDENTIALS", "true"),
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn admin_api_is_loaded_from_admin_prefix() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("ADMIN_CORS_ENABLED", "true"),
             ("ADMIN_CORS_ORIGINS", "https://admin.example.com"),
             ("ADMIN_CORS_CREDENTIALS", "true"),
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn public_and_admin_api_configs_are_independent() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("PUBLIC_CORS_ENABLED", "true"),
             ("PUBLIC_JWT_SECRET", "public-secret"),
             ("PUBLIC_CSRF_SECRET", "public-csrf"),
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn unprefixed_api_settings_are_not_used() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("CORS_ENABLED", "true"),
             ("CSRF_SECRET", "legacy-csrf-secret"),
             ("JWT_SECRET", "legacy-jwt-secret"),
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn public_and_admin_cookie_names_can_be_overridden() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("PUBLIC_JWT_COOKIE_NAME", "my_public_token"),
             ("ADMIN_JWT_COOKIE_NAME", "my_admin_token"),
         ]);
@@ -440,7 +440,7 @@ mod tests {
     #[test]
     fn empty_cookie_names_use_defaults() {
         for value in ["", " ", "   ", "\t", "\n"] {
-            let env = EnvConfig::from_iter([
+            let env = EnvConfig::from_pairs([
                 ("PUBLIC_JWT_COOKIE_NAME", value),
                 ("ADMIN_JWT_COOKIE_NAME", value),
             ]);
@@ -462,7 +462,7 @@ mod tests {
     #[test]
     fn public_authentication_is_disabled_when_secret_is_empty() {
         for secret in ["", " ", "   ", "\t", "\n"] {
-            let env = EnvConfig::from_iter([("PUBLIC_JWT_SECRET", secret)]);
+            let env = EnvConfig::from_pairs([("PUBLIC_JWT_SECRET", secret)]);
 
             let cfg = AppConfig::from_env_config(env);
 
@@ -476,7 +476,7 @@ mod tests {
     #[test]
     fn admin_authentication_is_disabled_when_secret_is_empty() {
         for secret in ["", " ", "   ", "\t", "\n"] {
-            let env = EnvConfig::from_iter([("ADMIN_JWT_SECRET", secret)]);
+            let env = EnvConfig::from_pairs([("ADMIN_JWT_SECRET", secret)]);
 
             let cfg = AppConfig::from_env_config(env);
 
@@ -490,7 +490,7 @@ mod tests {
     #[test]
     fn public_csrf_is_disabled_when_secret_is_empty() {
         for secret in ["", " ", "   ", "\t", "\n"] {
-            let env = EnvConfig::from_iter([("PUBLIC_CSRF_SECRET", secret)]);
+            let env = EnvConfig::from_pairs([("PUBLIC_CSRF_SECRET", secret)]);
 
             let cfg = AppConfig::from_env_config(env);
 
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn admin_csrf_is_disabled_when_secret_is_empty() {
         for secret in ["", " ", "   ", "\t", "\n"] {
-            let env = EnvConfig::from_iter([("ADMIN_CSRF_SECRET", secret)]);
+            let env = EnvConfig::from_pairs([("ADMIN_CSRF_SECRET", secret)]);
 
             let cfg = AppConfig::from_env_config(env);
 
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn http_body_size_falls_back_to_mb_when_bytes_absent() {
-        let env = EnvConfig::from_iter([("HTTP_MAX_BODY_MB", "7")]);
+        let env = EnvConfig::from_pairs([("HTTP_MAX_BODY_MB", "7")]);
 
         let cfg = AppConfig::from_env_config(env);
 
@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn malformed_numbers_use_defaults_where_applicable() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("IMAGE_MAX_WIDTH", "NaN"),
             ("IMAGE_MAX_HEIGHT", "oops"),
             ("HTTP_MAX_BODY_MB", "not-a-number"),
@@ -549,7 +549,7 @@ mod tests {
 
     #[test]
     fn html_path_is_loaded_from_env_config() {
-        let env = EnvConfig::from_iter([("HTML_PATH", "/tmp/index.html")]);
+        let env = EnvConfig::from_pairs([("HTML_PATH", "/tmp/index.html")]);
 
         let cfg = AppConfig::from_env_config(env);
 
@@ -565,7 +565,7 @@ mod tests {
 
     #[test]
     fn mail_config_is_none_when_required_smtp_vars_are_incomplete() {
-        let env = EnvConfig::from_iter([("SMTP_HOST", "smtp.example.com")]);
+        let env = EnvConfig::from_pairs([("SMTP_HOST", "smtp.example.com")]);
 
         let cfg = AppConfig::from_env_config(env);
 
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn mail_config_is_loaded_when_all_required_smtp_vars_are_present() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_PORT", "587"),
             ("SMTP_USERNAME", "user"),
@@ -602,7 +602,7 @@ mod tests {
 
     #[test]
     fn mail_config_uses_defaults_for_optional_fields() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_PORT", "25"),
             ("SMTP_USERNAME", "user"),
@@ -620,7 +620,7 @@ mod tests {
 
     #[test]
     fn mail_config_supports_multiple_notify_to_addresses() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_PORT", "587"),
             ("SMTP_USERNAME", "user"),
@@ -645,7 +645,7 @@ mod tests {
     #[test]
     fn graphiql_accepts_truthy_values() {
         for value in ["1", "true", "TRUE", "yes", "on"] {
-            let env = EnvConfig::from_iter([("GRAPHIQL", value)]);
+            let env = EnvConfig::from_pairs([("GRAPHIQL", value)]);
 
             let cfg = AppConfig::from_env_config(env);
 
@@ -655,7 +655,7 @@ mod tests {
 
     #[test]
     fn graphiql_defaults_to_false_for_invalid_value() {
-        let env = EnvConfig::from_iter([("GRAPHIQL", "invalid")]);
+        let env = EnvConfig::from_pairs([("GRAPHIQL", "invalid")]);
 
         let cfg = AppConfig::from_env_config(env);
 

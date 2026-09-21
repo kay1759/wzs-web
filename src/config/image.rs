@@ -18,7 +18,7 @@
 //! use wzs_web::config::env::EnvConfig;
 //! use wzs_web::config::image::ImageConfig;
 //!
-//! let env = EnvConfig::from_iter([
+//! let env = EnvConfig::from_pairs([
 //!     ("IMAGE_MAX_WIDTH", "1920"),
 //!     ("IMAGE_MAX_HEIGHT", "1080"),
 //! ]);
@@ -63,7 +63,7 @@ impl ImageConfig {
     /// use wzs_web::config::env::EnvConfig;
     /// use wzs_web::config::image::ImageConfig;
     ///
-    /// let env = EnvConfig::from_iter([
+    /// let env = EnvConfig::from_pairs([
     ///     ("IMAGE_MAX_WIDTH", "2048"),
     ///     ("IMAGE_MAX_HEIGHT", "1536"),
     /// ]);
@@ -111,7 +111,8 @@ mod tests {
 
     #[test]
     fn from_env_config_reads_values() {
-        let env = EnvConfig::from_iter([("IMAGE_MAX_WIDTH", "2048"), ("IMAGE_MAX_HEIGHT", "1536")]);
+        let env =
+            EnvConfig::from_pairs([("IMAGE_MAX_WIDTH", "2048"), ("IMAGE_MAX_HEIGHT", "1536")]);
 
         let cfg = ImageConfig::from_env_config(&env);
 
@@ -121,7 +122,7 @@ mod tests {
 
     #[test]
     fn from_env_config_uses_defaults_for_invalid_values() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("IMAGE_MAX_WIDTH", "invalid"),
             ("IMAGE_MAX_HEIGHT", "not-a-number"),
         ]);
@@ -135,7 +136,7 @@ mod tests {
     #[test]
     fn from_env_config_allows_independent_values() {
         let env =
-            EnvConfig::from_iter([("IMAGE_MAX_WIDTH", "1920"), ("IMAGE_MAX_HEIGHT", "invalid")]);
+            EnvConfig::from_pairs([("IMAGE_MAX_WIDTH", "1920"), ("IMAGE_MAX_HEIGHT", "invalid")]);
 
         let cfg = ImageConfig::from_env_config(&env);
 

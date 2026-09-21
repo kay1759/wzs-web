@@ -12,11 +12,11 @@
 use std::sync::Arc;
 
 use axum::{
+    Extension, Json,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Extension, Json,
 };
-use axum_extra::extract::{cookie::CookieJar, Multipart};
+use axum_extra::extract::{Multipart, cookie::CookieJar};
 use serde::Serialize;
 
 use crate::config::csrf::CsrfConfig;
@@ -228,10 +228,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use axum::{
-        body::{to_bytes, Body},
+        Router,
+        body::{Body, to_bytes},
         http::{Request, StatusCode},
         routing::post,
-        Router,
     };
     use tower::ServiceExt;
 

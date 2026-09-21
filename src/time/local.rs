@@ -11,7 +11,7 @@
 //! - Timezone names must follow the **IANA format**, e.g. `"Asia/Tokyo"` or `"Australia/Melbourne"`.
 //! - If an invalid name is given, the functions will return an error.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
 use std::str::FromStr;

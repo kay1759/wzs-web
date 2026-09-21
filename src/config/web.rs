@@ -30,7 +30,7 @@
 //! use wzs_web::config::env::EnvConfig;
 //! use wzs_web::config::web::{CorsConfig, HttpConfig};
 //!
-//! let env = EnvConfig::from_iter([
+//! let env = EnvConfig::from_pairs([
 //!     ("HTTP_MAX_BODY_MB", "10"),
 //!     ("CORS_ENABLED", "true"),
 //!     ("CORS_ORIGINS", "http://localhost:5173"),
@@ -90,7 +90,7 @@ impl HttpConfig {
     /// use wzs_web::config::env::EnvConfig;
     /// use wzs_web::config::web::HttpConfig;
     ///
-    /// let env = EnvConfig::from_iter([
+    /// let env = EnvConfig::from_pairs([
     ///     ("HTTP_MAX_BODY_MB", "10"),
     /// ]);
     ///
@@ -161,7 +161,7 @@ impl CorsConfig {
     /// use wzs_web::config::env::EnvConfig;
     /// use wzs_web::config::web::CorsConfig;
     ///
-    /// let env = EnvConfig::from_iter([
+    /// let env = EnvConfig::from_pairs([
     ///     ("CORS_ENABLED", "true"),
     ///     ("CORS_ORIGINS", "http://localhost:5173"),
     ///     ("CORS_CREDENTIALS", "true"),
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn http_config_reads_body_size_in_bytes() {
-        let env = EnvConfig::from_iter([("HTTP_MAX_BODY_BYTES", "3145728")]);
+        let env = EnvConfig::from_pairs([("HTTP_MAX_BODY_BYTES", "3145728")]);
 
         let cfg = HttpConfig::from_env_config(&env);
 
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn http_config_reads_body_size_in_megabytes() {
-        let env = EnvConfig::from_iter([("HTTP_MAX_BODY_MB", "7")]);
+        let env = EnvConfig::from_pairs([("HTTP_MAX_BODY_MB", "7")]);
 
         let cfg = HttpConfig::from_env_config(&env);
 
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn http_body_bytes_takes_precedence_over_megabytes() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("HTTP_MAX_BODY_BYTES", "3145728"),
             ("HTTP_MAX_BODY_MB", "99"),
         ]);
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn http_invalid_bytes_falls_back_to_megabytes() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("HTTP_MAX_BODY_BYTES", "invalid"),
             ("HTTP_MAX_BODY_MB", "7"),
         ]);
@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn http_invalid_numbers_use_default() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("HTTP_MAX_BODY_BYTES", "invalid"),
             ("HTTP_MAX_BODY_MB", "also-invalid"),
         ]);
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn cors_config_reads_values() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("CORS_ENABLED", "true"),
             (
                 "CORS_ORIGINS",
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn cors_config_accepts_truthy_flags() {
         for value in ["1", "true", "TRUE", "Yes", " on  "] {
-            let env = EnvConfig::from_iter([("CORS_ENABLED", value), ("CORS_CREDENTIALS", value)]);
+            let env = EnvConfig::from_pairs([("CORS_ENABLED", value), ("CORS_CREDENTIALS", value)]);
 
             let cfg = CorsConfig::from_env_config(&env);
 
@@ -339,7 +339,7 @@ mod tests {
     #[test]
     fn cors_config_accepts_falsy_flags() {
         for value in ["0", "false", "FALSE", "No", "off", "", "  ", "invalid"] {
-            let env = EnvConfig::from_iter([("CORS_ENABLED", value), ("CORS_CREDENTIALS", value)]);
+            let env = EnvConfig::from_pairs([("CORS_ENABLED", value), ("CORS_CREDENTIALS", value)]);
 
             let cfg = CorsConfig::from_env_config(&env);
 

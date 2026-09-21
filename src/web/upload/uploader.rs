@@ -29,7 +29,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -380,7 +380,7 @@ fn sanitize_filename(filename: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::{bail, Result};
+    use anyhow::{Result, bail};
     use std::sync::Mutex;
 
     /// A hand-written test double for [`FileStorage`].
@@ -786,9 +786,10 @@ mod tests {
             .upload("a.txt", "text/plain", b"hello", Some(params))
             .expect_err("must reject non-image content type");
 
-        assert!(err
-            .to_string()
-            .contains("content type is not supported as an image"));
+        assert!(
+            err.to_string()
+                .contains("content type is not supported as an image")
+        );
 
         let support_calls = image.support_calls();
         assert_eq!(support_calls, vec!["text/plain"]);

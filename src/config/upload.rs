@@ -22,7 +22,7 @@
 //! use wzs_web::config::env::EnvConfig;
 //! use wzs_web::config::upload::UploadConfig;
 //!
-//! let env = EnvConfig::from_iter([
+//! let env = EnvConfig::from_pairs([
 //!     ("UPLOAD_ROOT", "/var/www/uploads"),
 //!     ("UPLOAD_IMAGE_DIR", "images"),
 //!     ("UPLOAD_FILE_DIR", "files"),
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn from_env_config_reads_values() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("UPLOAD_ROOT", "/data/uploads"),
             ("UPLOAD_IMAGE_DIR", "pics"),
             ("UPLOAD_FILE_DIR", "docs"),
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn from_env_config_allows_independent_values() {
-        let env = EnvConfig::from_iter([("UPLOAD_IMAGE_DIR", "pictures")]);
+        let env = EnvConfig::from_pairs([("UPLOAD_IMAGE_DIR", "pictures")]);
 
         let cfg = UploadConfig::from_env_config(&env);
 

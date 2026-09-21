@@ -89,7 +89,7 @@ pub fn render_template_with_status<T: Template>(template: T, status: StatusCode)
 #[cfg(test)]
 mod tests {
     use askama::Template;
-    use axum::http::{header::CONTENT_TYPE, StatusCode};
+    use axum::http::{StatusCode, header::CONTENT_TYPE};
 
     use super::*;
 

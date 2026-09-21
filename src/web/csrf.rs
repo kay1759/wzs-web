@@ -33,15 +33,15 @@
 //! ```
 
 use axum::{
-    http::{
-        header::{CACHE_CONTROL, CONTENT_TYPE},
-        HeaderMap, StatusCode,
-    },
     Extension, Json,
+    http::{
+        HeaderMap, StatusCode,
+        header::{CACHE_CONTROL, CONTENT_TYPE},
+    },
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use hmac::{Hmac, Mac};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::Serialize;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
@@ -112,7 +112,7 @@ pub fn verify_token(cfg: &CsrfConfig, token: &str) -> bool {
     h.update(&nonce);
     let expected = h.finalize().into_bytes();
 
-    (&expected[..]).ct_eq(&mac).unwrap_u8() == 1
+    expected[..].ct_eq(&mac).unwrap_u8() == 1
 }
 
 /// Sets a signed CSRF cookie using configuration flags (`Secure`, `HttpOnly`).
@@ -238,8 +238,8 @@ pub async fn csrf_handler(
 mod tests {
     use super::*;
     use crate::config::csrf::derive_secret_from_string;
-    use axum::http::{HeaderMap, HeaderValue, StatusCode};
     use axum::Extension;
+    use axum::http::{HeaderMap, HeaderValue, StatusCode};
     use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 
     fn test_cfg() -> CsrfConfig {

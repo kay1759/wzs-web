@@ -21,7 +21,7 @@
 //! // Use pool as Arc<mysql::Pool>
 //! let conn = pool.get_conn().expect("failed to get connection");
 //! ```
-use crate::config::db::{create_pool, DbConfig, DbPool};
+use crate::config::db::{DbConfig, DbPool, create_pool};
 
 /// Creates a new MySQL connection pool using the given configuration.
 ///

@@ -18,6 +18,10 @@ use crate::web::csrf;
 /// # Returns
 /// - `Ok(())` if validation passes or CSRF is disabled
 /// - `Err(Response)` if CSRF validation fails
+// Returning `async_graphql::Response` directly keeps this guard convenient
+// for GraphQL handlers. The error path is only used when CSRF validation
+// fails, so boxing the response would add API complexity for little benefit.
+#[allow(clippy::result_large_err)]
 pub fn validate_csrf_guard(
     enable_csrf: bool,
     headers: &HeaderMap,

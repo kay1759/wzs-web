@@ -67,16 +67,31 @@ use image::{
 
 use super::processor::{BgColor, ImageProcessor, ResizeMode, ResizeOpts};
 
+/// Default maximum compressed input size: 20 MiB.
+const DEFAULT_MAX_INPUT_BYTES: usize = 20 * 1024 * 1024;
+
+/// Default maximum source width.
+const DEFAULT_MAX_WIDTH: u32 = 12_000;
+
+/// Default maximum source height.
+const DEFAULT_MAX_HEIGHT: u32 = 12_000;
+
+/// Default maximum total source pixel count: 100 megapixels.
+const DEFAULT_MAX_PIXELS: u64 = 40_000_000;
+
 /// Decode/input safety limits used to mitigate oversized images and
 /// decompression-bomb-style attacks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DecodeLimits {
     /// Maximum allowed compressed input bytes.
     pub max_input_bytes: usize,
+
     /// Maximum allowed source width.
     pub max_width: u32,
+
     /// Maximum allowed source height.
     pub max_height: u32,
+
     /// Maximum allowed source pixel count (`width * height`).
     pub max_pixels: u64,
 }
@@ -105,6 +120,7 @@ impl DecodeLimits {
                 self.max_input_bytes
             );
         }
+
         Ok(())
     }
 
@@ -115,6 +131,7 @@ impl DecodeLimits {
                 self.max_width
             );
         }
+
         if height > self.max_height {
             bail!(
                 "image height too large: {height} exceeds limit {}",
@@ -123,6 +140,7 @@ impl DecodeLimits {
         }
 
         let pixels = (width as u64) * (height as u64);
+
         if pixels > self.max_pixels {
             bail!(
                 "image pixel count too large: {pixels} exceeds limit {}",
@@ -136,29 +154,19 @@ impl DecodeLimits {
 
 impl Default for DecodeLimits {
     fn default() -> Self {
-        Self {
-            // 20 MiB compressed input
-            max_input_bytes: 20 * 1024 * 1024,
-            // Large enough for typical uploads, small enough to reject absurd images
-            max_width: 12_000,
-            max_height: 12_000,
-            max_pixels: 40_000_000,
-        }
+        Self::new(
+            DEFAULT_MAX_INPUT_BYTES,
+            DEFAULT_MAX_WIDTH,
+            DEFAULT_MAX_HEIGHT,
+            DEFAULT_MAX_PIXELS,
+        )
     }
 }
 
 /// Concrete [`ImageProcessor`] implementation using the `image` crate.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ImageRsProcessor {
     limits: DecodeLimits,
-}
-
-impl Default for ImageRsProcessor {
-    fn default() -> Self {
-        Self {
-            limits: DecodeLimits::default(),
-        }
-    }
 }
 
 impl ImageRsProcessor {
@@ -180,7 +188,8 @@ impl ImageRsProcessor {
         )
     }
 
-    /// Resizes the image and re-encodes it in the same format as requested by `content_type`.
+    /// Resizes the image and re-encodes it in the same format as requested by
+    /// `content_type`.
     pub fn resize_same_format(
         &self,
         img_bytes: &[u8],
@@ -188,9 +197,11 @@ impl ImageRsProcessor {
         opts: ResizeOpts,
     ) -> Result<Vec<u8>> {
         let output_format = output_format_from_content_type(content_type)?;
+
         self.limits.validate_input_size(img_bytes)?;
 
         let (src_w, src_h) = sniff_dimensions(img_bytes).context("read image dimensions")?;
+
         self.limits
             .validate_dimensions(src_w, src_h)
             .context("validate image dimensions")?;
@@ -199,6 +210,7 @@ impl ImageRsProcessor {
         let img = maybe_normalize_orientation(img_bytes, content_type, img);
 
         let processed = process_image(img, opts);
+
         encode_same_format(processed, output_format).context("encode resized image")
     }
 }
@@ -245,12 +257,14 @@ fn decode_image(img_bytes: &[u8]) -> Result<DynamicImage> {
 
 fn encode_same_format(img: DynamicImage, format: ImageFormat) -> Result<Vec<u8>> {
     let (w, h) = img.dimensions();
+
     let mut out = Vec::new();
     let mut cursor = Cursor::new(&mut out);
 
     match format {
         ImageFormat::Jpeg => {
             let rgb = img.to_rgb8();
+
             image::write_buffer_with_format(
                 &mut cursor,
                 &rgb,
@@ -260,8 +274,10 @@ fn encode_same_format(img: DynamicImage, format: ImageFormat) -> Result<Vec<u8>>
                 ImageFormat::Jpeg,
             )?;
         }
+
         ImageFormat::Png => {
             let rgba = img.to_rgba8();
+
             image::write_buffer_with_format(
                 &mut cursor,
                 &rgba,
@@ -271,10 +287,13 @@ fn encode_same_format(img: DynamicImage, format: ImageFormat) -> Result<Vec<u8>>
                 ImageFormat::Png,
             )?;
         }
+
         ImageFormat::Gif => {
             let rgba = img.to_rgba8();
+
             DynamicImage::ImageRgba8(rgba).write_to(&mut cursor, ImageFormat::Gif)?;
         }
+
         _ => bail!("unsupported output format: {format:?}"),
     }
 
@@ -283,6 +302,7 @@ fn encode_same_format(img: DynamicImage, format: ImageFormat) -> Result<Vec<u8>>
 
 fn process_image(img: DynamicImage, opts: ResizeOpts) -> DynamicImage {
     let (src_w, src_h) = img.dimensions();
+
     let already_within_bounds = src_w <= opts.max_w && src_h <= opts.max_h;
 
     if already_within_bounds && !opts.upscale {
@@ -291,6 +311,7 @@ fn process_image(img: DynamicImage, opts: ResizeOpts) -> DynamicImage {
 
     match opts.resize_mode {
         ResizeMode::Fit => resize_fit(img, opts.max_w, opts.max_h, opts.upscale),
+
         ResizeMode::Contain => resize_contain(
             img,
             opts.max_w,
@@ -298,6 +319,7 @@ fn process_image(img: DynamicImage, opts: ResizeOpts) -> DynamicImage {
             opts.upscale,
             bg_color_to_rgba(opts.bg_color),
         ),
+
         ResizeMode::Cover => resize_cover(img, opts.max_w, opts.max_h, opts.upscale),
     }
 }
@@ -334,13 +356,17 @@ fn resize_contain(
     }
 
     let mut canvas = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(max_w, max_h, bg));
+
     let x = ((max_w - fw) / 2) as i64;
     let y = ((max_h - fh) / 2) as i64;
+
     imageops::overlay(&mut canvas, &fitted, x, y);
+
     canvas
 }
 
-/// Keeps aspect ratio, fills the full target box, and crops overflow from the center.
+/// Keeps aspect ratio, fills the full target box, and crops overflow from the
+/// center.
 fn resize_cover(img: DynamicImage, max_w: u32, max_h: u32, upscale: bool) -> DynamicImage {
     let (w, h) = img.dimensions();
 
@@ -373,14 +399,18 @@ fn maybe_normalize_orientation(
             Some(orientation) => apply_orientation(img, orientation),
             None => img,
         },
+
         _ => img,
     }
 }
 
 fn read_exif_orientation(img_bytes: &[u8]) -> Option<u16> {
     let mut cursor = Cursor::new(img_bytes);
+
     let exif = ExifReader::new().read_from_container(&mut cursor).ok()?;
+
     let field = exif.get_field(Tag::Orientation, In::PRIMARY)?;
+
     field.value.get_uint(0).map(|v| v as u16)
 }
 
@@ -422,6 +452,7 @@ mod tests {
         block_h: u32,
     ) -> image::RgbaImage {
         let mut img = ImageBuffer::from_pixel(width, height, Rgba(bg));
+
         let start_x = (width.saturating_sub(block_w)) / 2;
         let start_y = (height.saturating_sub(block_h)) / 2;
 
@@ -436,15 +467,18 @@ mod tests {
 
     fn make_orientation_probe_rgba() -> image::RgbaImage {
         let mut img = ImageBuffer::from_pixel(3, 2, Rgba([0, 0, 0, 255]));
-        img.put_pixel(0, 0, Rgba([255, 0, 0, 255])); // top-left red
-        img.put_pixel(2, 0, Rgba([0, 255, 0, 255])); // top-right green
-        img.put_pixel(0, 1, Rgba([0, 0, 255, 255])); // bottom-left blue
-        img.put_pixel(2, 1, Rgba([255, 255, 0, 255])); // bottom-right yellow
+
+        img.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
+        img.put_pixel(2, 0, Rgba([0, 255, 0, 255]));
+        img.put_pixel(0, 1, Rgba([0, 0, 255, 255]));
+        img.put_pixel(2, 1, Rgba([255, 255, 0, 255]));
+
         img
     }
 
     fn encode_png(img: &image::RgbaImage) -> Vec<u8> {
         let mut cur = Cursor::new(Vec::new());
+
         image::write_buffer_with_format(
             &mut cur,
             img.as_raw(),
@@ -454,15 +488,19 @@ mod tests {
             image::ImageFormat::Png,
         )
         .expect("encode png");
+
         cur.into_inner()
     }
 
     fn encode_gif(img: &image::RgbaImage) -> Vec<u8> {
         let dyn_img = DynamicImage::ImageRgba8(img.clone());
+
         let mut cur = Cursor::new(Vec::new());
+
         dyn_img
             .write_to(&mut cur, image::ImageFormat::Gif)
             .expect("encode gif");
+
         cur.into_inner()
     }
 
@@ -487,11 +525,13 @@ mod tests {
 
     fn assert_png_signature(bytes: &[u8]) {
         assert!(bytes.len() >= 8, "png output too short");
+
         assert_eq!(&bytes[0..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
     }
 
     fn assert_gif_signature(bytes: &[u8]) {
         assert!(bytes.len() >= 6, "gif output too short");
+
         assert!(
             &bytes[0..6] == b"GIF87a" || &bytes[0..6] == b"GIF89a",
             "unexpected gif header: {:?}",
@@ -502,6 +542,12 @@ mod tests {
     #[test]
     fn decode_limits_default_is_sane() {
         let limits = DecodeLimits::default();
+
+        assert_eq!(limits.max_input_bytes, DEFAULT_MAX_INPUT_BYTES);
+        assert_eq!(limits.max_width, DEFAULT_MAX_WIDTH);
+        assert_eq!(limits.max_height, DEFAULT_MAX_HEIGHT);
+        assert_eq!(limits.max_pixels, DEFAULT_MAX_PIXELS);
+
         assert!(limits.max_input_bytes > 0);
         assert!(limits.max_width > 0);
         assert!(limits.max_height > 0);
@@ -511,9 +557,11 @@ mod tests {
     #[test]
     fn decode_limits_reject_large_input_bytes() {
         let limits = DecodeLimits::new(3, 100, 100, 10_000);
+
         let err = limits
             .validate_input_size(&[0, 1, 2, 3])
             .expect_err("must reject oversize input");
+
         assert!(err.to_string().contains("input image too large"));
     }
 
@@ -524,16 +572,19 @@ mod tests {
         let err = limits
             .validate_dimensions(101, 50)
             .expect_err("must reject large width");
+
         assert!(err.to_string().contains("image width too large"));
 
         let err = limits
             .validate_dimensions(50, 101)
             .expect_err("must reject large height");
+
         assert!(err.to_string().contains("image height too large"));
 
         let err = limits
             .validate_dimensions(101, 101)
             .expect_err("must reject too many pixels");
+
         assert!(
             err.to_string().contains("image width too large")
                 || err.to_string().contains("image pixel count too large")
@@ -543,6 +594,7 @@ mod tests {
     #[test]
     fn supports_expected_mimes() {
         let p = ImageRsProcessor::default();
+
         assert!(p.is_supported("image/png"));
         assert!(p.is_supported("image/jpeg"));
         assert!(p.is_supported("image/jpg"));
@@ -562,14 +614,17 @@ mod tests {
             output_format_from_content_type("image/jpeg").unwrap(),
             ImageFormat::Jpeg
         );
+
         assert_eq!(
             output_format_from_content_type("image/jpg").unwrap(),
             ImageFormat::Jpeg
         );
+
         assert_eq!(
             output_format_from_content_type("image/png").unwrap(),
             ImageFormat::Png
         );
+
         assert_eq!(
             output_format_from_content_type("image/gif").unwrap(),
             ImageFormat::Gif
@@ -579,23 +634,28 @@ mod tests {
     #[test]
     fn output_format_mapping_rejects_unsupported_types() {
         let err = output_format_from_content_type("image/webp").expect_err("must reject webp");
+
         assert!(err.to_string().contains("unsupported content-type"));
 
         let err =
             output_format_from_content_type("text/plain").expect_err("must reject text/plain");
+
         assert!(err.to_string().contains("unsupported content-type"));
     }
 
     #[test]
     fn sniff_dimensions_reads_dimensions_without_full_decode() {
         let src = encode_png(&make_pattern_rgba(123, 45));
+
         let dims = sniff_dimensions(&src).expect("sniff dimensions");
+
         assert_eq!(dims, (123, 45));
     }
 
     #[test]
     fn fit_downscales_within_bounds_and_preserves_aspect_ratio() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(2000, 1000));
 
         let out = p
@@ -609,9 +669,11 @@ mod tests {
         assert_jpeg_signature(&out);
 
         let (rw, rh) = decode_dims(&out);
+
         assert!(rw <= 1280 && rh <= 1280, "actual dims: {rw}x{rh}");
 
         let ratio = rw as f64 / rh as f64;
+
         assert!(
             (ratio - 2.0).abs() < 0.05,
             "expected aspect ratio ~2.0, got {ratio}"
@@ -621,6 +683,7 @@ mod tests {
     #[test]
     fn fit_does_not_upscale_when_disabled() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(100, 50));
 
         let out = p
@@ -638,6 +701,7 @@ mod tests {
     #[test]
     fn fit_upscales_when_enabled() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(100, 50));
 
         let out = p
@@ -649,12 +713,14 @@ mod tests {
             .expect("resize ok");
 
         let (rw, rh) = decode_dims(&out);
+
         assert_eq!((rw, rh), (500, 250));
     }
 
     #[test]
     fn contain_downscales_and_outputs_exact_canvas_size() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(2000, 1000));
 
         let out = p
@@ -678,6 +744,7 @@ mod tests {
     #[test]
     fn contain_upscales_and_outputs_exact_canvas_size() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(100, 50));
 
         let out = p
@@ -700,7 +767,9 @@ mod tests {
     #[test]
     fn contain_uses_requested_background_color() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(200, 100));
+
         let bg = BgColor::new(10, 20, 30, 255);
 
         let out = p
@@ -712,15 +781,18 @@ mod tests {
             .expect("resize ok");
 
         let decoded = decode_rgba(&out);
+
         assert_eq!(decoded.dimensions(), (400, 400));
 
         let top_left = decoded.get_pixel(0, 0);
+
         assert_eq!(*top_left, Rgba([10, 20, 30, 255]));
     }
 
     #[test]
     fn contain_preserves_transparent_background_for_png() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(200, 100));
 
         let out = p
@@ -732,15 +804,18 @@ mod tests {
             .expect("resize ok");
 
         let decoded = decode_rgba(&out);
+
         assert_eq!(decoded.dimensions(), (400, 400));
 
         let top_left = decoded.get_pixel(0, 0);
+
         assert_eq!(*top_left, Rgba([0, 0, 0, 0]));
     }
 
     #[test]
     fn contain_returns_original_when_small_and_upscale_is_false() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(200, 100));
 
         let out = p
@@ -763,6 +838,7 @@ mod tests {
     #[test]
     fn cover_downscales_and_outputs_exact_canvas_size() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(2000, 1000));
 
         let out = p
@@ -779,6 +855,7 @@ mod tests {
     #[test]
     fn cover_upscales_when_enabled() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(100, 50));
 
         let out = p
@@ -795,6 +872,7 @@ mod tests {
     #[test]
     fn cover_returns_original_when_small_and_upscale_is_false() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(200, 100));
 
         let out = p
@@ -813,6 +891,7 @@ mod tests {
         let p = ImageRsProcessor::default();
 
         let src_img = make_center_block_rgba(400, 200, [0, 0, 0, 255], [255, 0, 0, 255], 80, 80);
+
         let src = encode_png(&src_img);
 
         let out = p
@@ -824,9 +903,11 @@ mod tests {
             .expect("resize ok");
 
         let decoded = decode_rgba(&out);
+
         assert_eq!(decoded.dimensions(), (100, 100));
 
         let center = decoded.get_pixel(50, 50);
+
         assert!(
             center[0] > 200 && center[1] < 80 && center[2] < 80 && center[3] > 200,
             "expected center area to remain red after cover crop, got {:?}",
@@ -837,6 +918,7 @@ mod tests {
     #[test]
     fn all_modes_return_original_when_small_and_upscale_is_false() {
         let src = encode_png(&make_pattern_rgba(100, 50));
+
         let p = ImageRsProcessor::default();
 
         for mode in [ResizeMode::Fit, ResizeMode::Contain, ResizeMode::Cover] {
@@ -859,6 +941,7 @@ mod tests {
     #[test]
     fn jpeg_output_is_jpeg() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(300, 200));
 
         let out = p
@@ -875,6 +958,7 @@ mod tests {
     #[test]
     fn png_output_is_png() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(300, 200));
 
         let out = p
@@ -891,6 +975,7 @@ mod tests {
     #[test]
     fn gif_output_is_gif() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(300, 200));
 
         let out = p
@@ -907,6 +992,7 @@ mod tests {
     #[test]
     fn gif_input_can_be_decoded_and_resized() {
         let p = ImageRsProcessor::default();
+
         let gif = encode_gif(&make_pattern_rgba(320, 160));
 
         let out = p
@@ -918,13 +1004,16 @@ mod tests {
             .expect("resize ok");
 
         assert_png_signature(&out);
+
         let (rw, rh) = decode_dims(&out);
+
         assert!(rw <= 100 && rh <= 100);
     }
 
     #[test]
     fn unsupported_content_type_is_rejected() {
         let p = ImageRsProcessor::default();
+
         let src = encode_png(&make_pattern_rgba(100, 100));
 
         let err = p
@@ -951,6 +1040,7 @@ mod tests {
             .expect_err("must reject invalid image bytes");
 
         let msg = err.to_string();
+
         assert!(
             msg.contains("read image dimensions")
                 || msg.contains("decode image bytes")
@@ -962,6 +1052,7 @@ mod tests {
     #[test]
     fn bg_color_to_rgba_maps_channels_exactly() {
         let rgba = bg_color_to_rgba(BgColor::new(1, 2, 3, 4));
+
         assert_eq!(rgba, Rgba([1, 2, 3, 4]));
     }
 
@@ -978,6 +1069,7 @@ mod tests {
     #[test]
     fn processor_rejects_input_when_compressed_bytes_exceed_limit() {
         let p = ImageRsProcessor::new(DecodeLimits::new(10, 10_000, 10_000, 100_000_000));
+
         let src = encode_png(&make_pattern_rgba(100, 100));
 
         let err = p
@@ -994,6 +1086,7 @@ mod tests {
     #[test]
     fn processor_rejects_input_when_dimensions_exceed_limit() {
         let p = ImageRsProcessor::new(DecodeLimits::new(1024 * 1024, 50, 10_000, 100_000_000));
+
         let src = encode_png(&make_pattern_rgba(100, 100));
 
         let err = p
@@ -1013,7 +1106,8 @@ mod tests {
     #[test]
     fn processor_rejects_input_when_pixel_count_exceeds_limit() {
         let p = ImageRsProcessor::new(DecodeLimits::new(1024 * 1024, 10_000, 10_000, 5_000));
-        let src = encode_png(&make_pattern_rgba(100, 100)); // 10,000 pixels
+
+        let src = encode_png(&make_pattern_rgba(100, 100));
 
         let err = p
             .resize_same_format(
@@ -1032,38 +1126,52 @@ mod tests {
     #[test]
     fn apply_orientation_rotation_6_rotates_clockwise() {
         let src = DynamicImage::ImageRgba8(make_orientation_probe_rgba());
+
         let out = apply_orientation(src, 6).to_rgba8();
 
         assert_eq!(out.dimensions(), (2, 3));
-        assert_eq!(*out.get_pixel(1, 0), Rgba([255, 0, 0, 255])); // old top-left -> top-right
-        assert_eq!(*out.get_pixel(1, 2), Rgba([0, 255, 0, 255])); // old top-right -> bottom-right
-        assert_eq!(*out.get_pixel(0, 0), Rgba([0, 0, 255, 255])); // old bottom-left -> top-left
-        assert_eq!(*out.get_pixel(0, 2), Rgba([255, 255, 0, 255])); // old bottom-right -> bottom-left
+
+        assert_eq!(*out.get_pixel(1, 0), Rgba([255, 0, 0, 255]));
+
+        assert_eq!(*out.get_pixel(1, 2), Rgba([0, 255, 0, 255]));
+
+        assert_eq!(*out.get_pixel(0, 0), Rgba([0, 0, 255, 255]));
+
+        assert_eq!(*out.get_pixel(0, 2), Rgba([255, 255, 0, 255]));
     }
 
     #[test]
     fn apply_orientation_rotation_3_rotates_180() {
         let src = DynamicImage::ImageRgba8(make_orientation_probe_rgba());
+
         let out = apply_orientation(src, 3).to_rgba8();
 
         assert_eq!(out.dimensions(), (3, 2));
+
         assert_eq!(*out.get_pixel(2, 1), Rgba([255, 0, 0, 255]));
+
         assert_eq!(*out.get_pixel(0, 1), Rgba([0, 255, 0, 255]));
+
         assert_eq!(*out.get_pixel(2, 0), Rgba([0, 0, 255, 255]));
+
         assert_eq!(*out.get_pixel(0, 0), Rgba([255, 255, 0, 255]));
     }
 
     #[test]
     fn apply_orientation_unknown_value_returns_original() {
         let src = DynamicImage::ImageRgba8(make_orientation_probe_rgba());
+
         let out = apply_orientation(src.clone(), 999).to_rgba8();
+
         assert_eq!(out, src.to_rgba8());
     }
 
     #[test]
     fn maybe_normalize_orientation_is_noop_for_non_jpeg() {
         let src = DynamicImage::ImageRgba8(make_orientation_probe_rgba());
+
         let out = maybe_normalize_orientation(b"not-exif", "image/png", src.clone()).to_rgba8();
+
         assert_eq!(out, src.to_rgba8());
     }
 }

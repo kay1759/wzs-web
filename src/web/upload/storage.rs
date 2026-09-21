@@ -68,7 +68,7 @@ pub trait FileStorage: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::{bail, Result};
+    use anyhow::{Result, bail};
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]

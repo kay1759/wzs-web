@@ -1,4 +1,4 @@
-use lettre::message::{header::ContentType, Mailbox};
+use lettre::message::{Mailbox, header::ContentType};
 
 /// A Value Object representing a complete email message.
 ///

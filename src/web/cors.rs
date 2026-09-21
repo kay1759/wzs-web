@@ -28,7 +28,7 @@
 //! This setup will allow cross-origin requests from `http://example.com`
 //! and include `Access-Control-Allow-Credentials: true` in responses.
 
-use axum::http::{header, HeaderName, HeaderValue, Method};
+use axum::http::{HeaderName, HeaderValue, Method, header};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::config::web::CorsConfig;
@@ -109,10 +109,10 @@ pub fn build_cors(cors: &CorsConfig) -> Option<CorsLayer> {
 mod tests {
     use super::*;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
         routing::{get, options},
-        Router,
     };
     use tower::ServiceExt;
 
@@ -254,10 +254,11 @@ mod tests {
                 .unwrap(),
             "http://localhost:5173"
         );
-        assert!(res
-            .headers()
-            .get("access-control-allow-credentials")
-            .is_none());
+        assert!(
+            res.headers()
+                .get("access-control-allow-credentials")
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -344,10 +345,12 @@ mod tests {
             "*"
         );
 
-        assert!(pre_res
-            .headers()
-            .get("access-control-allow-credentials")
-            .is_none());
+        assert!(
+            pre_res
+                .headers()
+                .get("access-control-allow-credentials")
+                .is_none()
+        );
 
         let req = Request::builder()
             .method("GET")
@@ -367,10 +370,11 @@ mod tests {
                 .unwrap(),
             "*"
         );
-        assert!(res
-            .headers()
-            .get("access-control-allow-credentials")
-            .is_none());
+        assert!(
+            res.headers()
+                .get("access-control-allow-credentials")
+                .is_none()
+        );
     }
 
     #[tokio::test]

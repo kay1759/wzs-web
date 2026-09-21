@@ -33,7 +33,7 @@
 //! use wzs_web::config::csrf::{derive_secret_from_string, CsrfConfig};
 //! use wzs_web::config::env::EnvConfig;
 //!
-//! let env = EnvConfig::from_iter([
+//! let env = EnvConfig::from_pairs([
 //!     ("CSRF_SECRET", "my-top-secret"),
 //!     ("CSRF_COOKIE_SECURE", "false"),
 //!     ("CSRF_COOKIE_HTTPONLY", "true"),
@@ -49,7 +49,7 @@
 //! assert!(cfg.cookie_http_only);
 //! ```
 
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 
 use crate::config::env::EnvConfig;
@@ -112,7 +112,7 @@ impl CsrfConfig {
     /// use wzs_web::config::csrf::CsrfConfig;
     /// use wzs_web::config::env::EnvConfig;
     ///
-    /// let env = EnvConfig::from_iter([
+    /// let env = EnvConfig::from_pairs([
     ///     ("CSRF_SECRET", "my-top-secret"),
     ///     ("CSRF_COOKIE_SECURE", "false"),
     ///     ("CSRF_COOKIE_HTTPONLY", "true"),
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn from_env_config_respects_secret_and_flags() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("CSRF_SECRET", "my-top-secret"),
             ("CSRF_COOKIE_SECURE", "false"),
             ("CSRF_COOKIE_HTTPONLY", "0"),
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn from_env_config_derives_stable_secret_when_configured() {
-        let env = EnvConfig::from_iter([("CSRF_SECRET", "my-top-secret")]);
+        let env = EnvConfig::from_pairs([("CSRF_SECRET", "my-top-secret")]);
 
         let first = CsrfConfig::from_env_config(&env);
         let second = CsrfConfig::from_env_config(&env);
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn from_env_config_defaults_cookie_flags_to_true() {
-        let env = EnvConfig::from_iter([("CSRF_SECRET", "my-top-secret")]);
+        let env = EnvConfig::from_pairs([("CSRF_SECRET", "my-top-secret")]);
 
         let cfg = CsrfConfig::from_env_config(&env);
 
@@ -290,7 +290,7 @@ mod tests {
     #[test]
     fn from_env_config_accepts_truthy_cookie_flags() {
         for value in ["1", "true", "TRUE", "Yes", " on  "] {
-            let env = EnvConfig::from_iter([
+            let env = EnvConfig::from_pairs([
                 ("CSRF_COOKIE_SECURE", value),
                 ("CSRF_COOKIE_HTTPONLY", value),
             ]);
@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn from_env_config_accepts_falsy_cookie_flags() {
         for value in ["0", "false", "no", "off", "", "  "] {
-            let env = EnvConfig::from_iter([
+            let env = EnvConfig::from_pairs([
                 ("CSRF_COOKIE_SECURE", value),
                 ("CSRF_COOKIE_HTTPONLY", value),
             ]);
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn from_env_config_preserves_legacy_behavior_for_invalid_flags() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("CSRF_COOKIE_SECURE", "invalid"),
             ("CSRF_COOKIE_HTTPONLY", "invalid"),
         ]);
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn from_env_with_respects_secret_and_flags() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("CSRF_SECRET", "my-top-secret"),
             ("CSRF_COOKIE_SECURE", "false"),
             ("CSRF_COOKIE_HTTPONLY", "0"),
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn from_env_config_generates_random_secret_when_secret_is_empty() {
         for value in ["", " ", "   ", "\t", "\n"] {
-            let env = EnvConfig::from_iter([("CSRF_SECRET", value)]);
+            let env = EnvConfig::from_pairs([("CSRF_SECRET", value)]);
 
             let first = CsrfConfig::from_env_config(&env);
             let second = CsrfConfig::from_env_config(&env);

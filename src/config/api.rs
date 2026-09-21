@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn loads_cors_configuration() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("CORS_ENABLED", "true"),
             ("CORS_ORIGINS", "http://localhost:5173"),
             ("CORS_CREDENTIALS", "true"),
@@ -126,7 +126,7 @@ mod tests {
 
     #[test]
     fn enables_csrf_when_secret_is_present() {
-        let env = EnvConfig::from_iter([("CSRF_SECRET", "csrf-secret")]);
+        let env = EnvConfig::from_pairs([("CSRF_SECRET", "csrf-secret")]);
 
         let cfg = ApiConfig::from_env_config(&env, "auth_token");
 
@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn disables_csrf_when_secret_is_empty() {
         for value in ["", " ", "   ", "\t", "\n"] {
-            let env = EnvConfig::from_iter([("CSRF_SECRET", value)]);
+            let env = EnvConfig::from_pairs([("CSRF_SECRET", value)]);
 
             let cfg = ApiConfig::from_env_config(&env, "auth_token");
 
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn loads_authentication_configuration() {
-        let env = EnvConfig::from_iter([("JWT_SECRET", "jwt-secret")]);
+        let env = EnvConfig::from_pairs([("JWT_SECRET", "jwt-secret")]);
 
         let cfg = ApiConfig::from_env_config(&env, "auth_token");
 
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn api_config_is_cloneable() {
         let env =
-            EnvConfig::from_iter([("JWT_SECRET", "jwt-secret"), ("CSRF_SECRET", "csrf-secret")]);
+            EnvConfig::from_pairs([("JWT_SECRET", "jwt-secret"), ("CSRF_SECRET", "csrf-secret")]);
 
         let cfg = ApiConfig::from_env_config(&env, "auth_token");
 
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn debug_output_does_not_expose_jwt_secret() {
-        let env = EnvConfig::from_iter([("JWT_SECRET", "super-secret-jwt-value")]);
+        let env = EnvConfig::from_pairs([("JWT_SECRET", "super-secret-jwt-value")]);
 
         let cfg = ApiConfig::from_env_config(&env, "auth_token");
 

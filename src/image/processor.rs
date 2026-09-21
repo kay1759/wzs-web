@@ -59,7 +59,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// Background color used for padding in [`ResizeMode::Contain`].
 ///

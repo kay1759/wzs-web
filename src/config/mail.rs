@@ -123,7 +123,7 @@ impl MailConfig {
     /// use wzs_web::config::env::EnvConfig;
     /// use wzs_web::config::mail::MailConfig;
     ///
-    /// let env = EnvConfig::from_iter([
+    /// let env = EnvConfig::from_pairs([
     ///     ("SMTP_HOST", "smtp.example.com"),
     ///     ("SMTP_PORT", "587"),
     ///     ("SMTP_USERNAME", "user"),
@@ -223,7 +223,7 @@ mod tests {
 
     /// Creates the minimum valid environment required by [`MailConfig`].
     fn valid_env() -> EnvConfig {
-        EnvConfig::from_iter([
+        EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_PORT", "587"),
             ("SMTP_USERNAME", "user"),
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn from_env_config_respects_from_name() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_PORT", "587"),
             ("SMTP_USERNAME", "user"),
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn from_env_config_with_single_notify_to() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_PORT", "587"),
             ("SMTP_USERNAME", "user"),
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn from_env_config_with_multiple_notify_to() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_PORT", "587"),
             ("SMTP_USERNAME", "user"),
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn from_env_config_ignores_empty_notify_to_entries() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_PORT", "587"),
             ("SMTP_USERNAME", "user"),
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn from_env_config_allows_empty_notify_to() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_PORT", "587"),
             ("SMTP_USERNAME", "user"),
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn from_env_config_errors_when_host_is_missing() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_PORT", "587"),
             ("SMTP_USERNAME", "user"),
             ("SMTP_PASSWORD", "pass"),
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn from_env_config_errors_when_port_is_missing() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_USERNAME", "user"),
             ("SMTP_PASSWORD", "pass"),
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn from_env_config_errors_when_username_is_missing() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_PORT", "587"),
             ("SMTP_PASSWORD", "pass"),
@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn from_env_config_errors_when_password_is_missing() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_PORT", "587"),
             ("SMTP_USERNAME", "user"),
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn from_env_config_errors_when_from_email_is_missing() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_PORT", "587"),
             ("SMTP_USERNAME", "user"),
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn from_env_config_errors_when_port_is_invalid() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("SMTP_HOST", "smtp.example.com"),
             ("SMTP_PORT", "not-a-number"),
             ("SMTP_USERNAME", "user"),

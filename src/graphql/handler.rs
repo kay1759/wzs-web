@@ -5,9 +5,7 @@ use axum::Extension;
 use axum_extra::extract::cookie::CookieJar;
 
 use crate::auth::CurrentUser;
-use crate::config::auth::AuthConfig;
-use crate::config::csrf::CsrfConfig;
-use crate::graphql::config::GraphqlAuthConfig;
+use crate::config::api::ApiConfig;
 use crate::graphql::context::extract_current_user;
 use crate::graphql::guard::validate_csrf_guard;
 
@@ -64,10 +62,7 @@ use crate::graphql::guard::validate_csrf_guard;
 /// to meet `async-graphql` execution requirements.
 pub async fn graphql_post_handler<Q, M, S>(
     Extension(schema): Extension<Schema<Q, M, S>>,
-    Extension(enable_csrf): Extension<bool>,
-    Extension(csrf_cfg): Extension<CsrfConfig>,
-    Extension(auth): Extension<AuthConfig>,
-    Extension(graphql_auth): Extension<GraphqlAuthConfig>,
+    Extension(api_config): Extension<ApiConfig>,
     jar: CookieJar,
     headers: HeaderMap,
     req: GraphQLRequest,
@@ -84,7 +79,8 @@ where
     // When CSRF protection is enabled, validate the request
     // headers and cookies. On failure, return a GraphQL-
     // compliant error response (HTTP 200 with `errors`).
-    if let Err(resp) = validate_csrf_guard(enable_csrf, &headers, &jar, &csrf_cfg) {
+    if let Err(resp) = validate_csrf_guard(api_config.enable_csrf, &headers, &jar, &api_config.csrf)
+    {
         return resp.into();
     }
 
@@ -104,8 +100,8 @@ where
     let current_user: Option<CurrentUser> = extract_current_user(
         &jar,
         &headers,
-        auth.jwt_secret(),
-        &graphql_auth.jwt_cookie_name,
+        api_config.auth.jwt_secret(),
+        &api_config.graphql_auth.jwt_cookie_name,
     );
 
     // -----------------------------
@@ -130,6 +126,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+    use crate::config::api::ApiConfig;
     use crate::config::env::EnvConfig;
 
     struct Query;
@@ -145,7 +142,8 @@ mod tests {
     async fn graphql_handler_executes_query_without_authentication() {
         let schema = Schema::build(Query, EmptyMutation, EmptySubscription).finish();
 
-        let auth = AuthConfig::from_env_config(&EnvConfig::default());
+        let env = EnvConfig::default();
+        let api_config = ApiConfig::from_env_config(&env, "auth");
 
         let app = Router::new()
             .route(
@@ -153,10 +151,7 @@ mod tests {
                 post(graphql_post_handler::<Query, EmptyMutation, EmptySubscription>),
             )
             .layer(Extension(schema))
-            .layer(Extension(false))
-            .layer(Extension(CsrfConfig::from_env_with(|_| None)))
-            .layer(Extension(auth))
-            .layer(Extension(GraphqlAuthConfig::new("auth")));
+            .layer(Extension(api_config));
 
         let response = app
             .oneshot(

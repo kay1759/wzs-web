@@ -30,7 +30,7 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
-use mysql::{prelude::*, Error as MyError, Params, Pool, Value as My};
+use mysql::{Error as MyError, Params, Pool, Value as My, prelude::*};
 
 use crate::db::port::{Db, Param, Row as GRow, Value};
 
@@ -50,16 +50,16 @@ macro_rules! dbglog {
 #[inline]
 fn mysql_err_summary(e: &MyError) -> String {
     match e {
-        &MyError::MySqlError(ref me) => format!(
+        MyError::MySqlError(me) => format!(
             "code={}, state={}, message={}",
             me.code, me.state, me.message
         ),
-        &MyError::DriverError(ref de) => format!("driver={de:?}"),
-        &MyError::UrlError(ref ue) => format!("url={ue:?}"),
-        &MyError::IoError(ref ioe) => format!("io={ioe}"),
-        &MyError::CodecError(ref ce) => format!("codec={ce:?}"),
-        &MyError::FromValueError(ref fve) => format!("from_value={fve:?}"),
-        &MyError::FromRowError(ref fre) => format!("from_row={fre:?}"),
+        MyError::DriverError(de) => format!("driver={de:?}"),
+        MyError::UrlError(ue) => format!("url={ue:?}"),
+        MyError::IoError(ioe) => format!("io={ioe}"),
+        MyError::CodecError(ce) => format!("codec={ce:?}"),
+        MyError::FromValueError(fve) => format!("from_value={fve:?}"),
+        MyError::FromRowError(fre) => format!("from_row={fre:?}"),
     }
 }
 
@@ -404,9 +404,9 @@ mod tests {
         }
 
         // F64
-        match MySqlDb::to_mysql_value(&Param::F64(3.14159)) {
-            My::Double(v) => assert!((v - 3.14159).abs() < 1e-12),
-            other => panic!("expected Double(3.14159), got {other:?}"),
+        match MySqlDb::to_mysql_value(&Param::F64(12.34567)) {
+            My::Double(v) => assert!((v - 12.34567).abs() < 1e-12),
+            other => panic!("expected Double(12.34567), got {other:?}"),
         }
     }
 }

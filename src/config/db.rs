@@ -32,7 +32,7 @@
 //! use wzs_web::config::db::DbConfig;
 //! use wzs_web::config::env::EnvConfig;
 //!
-//! let env = EnvConfig::from_iter([
+//! let env = EnvConfig::from_pairs([
 //!     ("DATABASE_URL", "mysql://root:pass@localhost:3306/testdb"),
 //!     ("DATABASE_MAX_CONN", "20"),
 //! ]);
@@ -111,7 +111,7 @@ impl DbConfig {
     /// use wzs_web::config::db::DbConfig;
     /// use wzs_web::config::env::EnvConfig;
     ///
-    /// let env = EnvConfig::from_iter([
+    /// let env = EnvConfig::from_pairs([
     ///     ("DATABASE_URL", "mysql://root:pass@localhost:3306/testdb"),
     ///     ("DATABASE_MAX_CONN", "20"),
     /// ]);
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn dbconfig_reads_from_env_config() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("DATABASE_URL", "mysql://root:pass@localhost:3306/testdb"),
             ("DATABASE_MAX_CONN", "20"),
         ]);
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn dbconfig_is_valid_when_database_url_exists() {
         let env =
-            EnvConfig::from_iter([("DATABASE_URL", "mysql://root:pass@localhost:3306/testdb")]);
+            EnvConfig::from_pairs([("DATABASE_URL", "mysql://root:pass@localhost:3306/testdb")]);
 
         let cfg = DbConfig::from_env_config(&env);
 
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn dbconfig_allows_missing_max_connections() {
         let env =
-            EnvConfig::from_iter([("DATABASE_URL", "mysql://root:pass@localhost:3306/testdb")]);
+            EnvConfig::from_pairs([("DATABASE_URL", "mysql://root:pass@localhost:3306/testdb")]);
 
         let cfg = DbConfig::from_env_config(&env);
 
@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn dbconfig_ignores_invalid_max_connections() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("DATABASE_URL", "mysql://root:pass@localhost:3306/testdb"),
             ("DATABASE_MAX_CONN", "invalid"),
         ]);
@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn dbconfig_parses_max_connections_with_whitespace() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("DATABASE_URL", "mysql://root:pass@localhost:3306/testdb"),
             ("DATABASE_MAX_CONN", " 20 "),
         ]);

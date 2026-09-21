@@ -35,7 +35,7 @@ impl LocalFileStorage {
             fs::create_dir_all(dir).with_context(|| format!("create_dir_all {:?}", dir))?;
         }
 
-        fs::write(&full, bytes).with_context(|| format!("write {:?}", &full))?;
+        fs::write(&full, bytes).with_context(|| format!("write {:?}", full))?;
         Ok(full.to_string_lossy().into_owned())
     }
 

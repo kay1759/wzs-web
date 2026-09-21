@@ -14,7 +14,7 @@
 //! use wzs_web::config::auth::AuthConfig;
 //! use wzs_web::config::env::EnvConfig;
 //!
-//! let env = EnvConfig::from_iter([
+//! let env = EnvConfig::from_pairs([
 //!     ("JWT_SECRET", "my-secret"),
 //! ]);
 //!
@@ -78,7 +78,7 @@ impl AuthConfig {
     /// use wzs_web::config::auth::AuthConfig;
     /// use wzs_web::config::env::EnvConfig;
     ///
-    /// let env = EnvConfig::from_iter([
+    /// let env = EnvConfig::from_pairs([
     ///     ("JWT_SECRET", "unit-test-secret"),
     /// ]);
     ///
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn authentication_is_enabled_when_secret_is_present() {
-        let env = EnvConfig::from_iter([("JWT_SECRET", "unit-test-secret")]);
+        let env = EnvConfig::from_pairs([("JWT_SECRET", "unit-test-secret")]);
 
         let cfg = AuthConfig::from_env_config(&env);
 
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn authentication_is_disabled_when_secret_is_empty() {
         for value in ["", " ", "   ", "\t", "\n"] {
-            let env = EnvConfig::from_iter([("JWT_SECRET", value)]);
+            let env = EnvConfig::from_pairs([("JWT_SECRET", value)]);
 
             let cfg = AuthConfig::from_env_config(&env);
 
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn secret_whitespace_is_preserved_when_non_empty() {
-        let env = EnvConfig::from_iter([("JWT_SECRET", "  secret  ")]);
+        let env = EnvConfig::from_pairs([("JWT_SECRET", "  secret  ")]);
 
         let cfg = AuthConfig::from_env_config(&env);
 
@@ -181,9 +181,9 @@ mod tests {
 
     #[test]
     fn configs_with_same_secret_are_equal() {
-        let first_env = EnvConfig::from_iter([("JWT_SECRET", "secret")]);
+        let first_env = EnvConfig::from_pairs([("JWT_SECRET", "secret")]);
 
-        let second_env = EnvConfig::from_iter([("JWT_SECRET", "secret")]);
+        let second_env = EnvConfig::from_pairs([("JWT_SECRET", "secret")]);
 
         let first = AuthConfig::from_env_config(&first_env);
         let second = AuthConfig::from_env_config(&second_env);
@@ -193,9 +193,9 @@ mod tests {
 
     #[test]
     fn configs_with_different_secrets_are_not_equal() {
-        let first_env = EnvConfig::from_iter([("JWT_SECRET", "first-secret")]);
+        let first_env = EnvConfig::from_pairs([("JWT_SECRET", "first-secret")]);
 
-        let second_env = EnvConfig::from_iter([("JWT_SECRET", "second-secret")]);
+        let second_env = EnvConfig::from_pairs([("JWT_SECRET", "second-secret")]);
 
         let first = AuthConfig::from_env_config(&first_env);
         let second = AuthConfig::from_env_config(&second_env);
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn config_is_cloneable() {
-        let env = EnvConfig::from_iter([("JWT_SECRET", "secret")]);
+        let env = EnvConfig::from_pairs([("JWT_SECRET", "secret")]);
 
         let cfg = AuthConfig::from_env_config(&env);
         let cloned = cfg.clone();
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn debug_redacts_jwt_secret() {
-        let env = EnvConfig::from_iter([("JWT_SECRET", "super-secret-value")]);
+        let env = EnvConfig::from_pairs([("JWT_SECRET", "super-secret-value")]);
 
         let cfg = AuthConfig::from_env_config(&env);
         let debug = format!("{cfg:?}");

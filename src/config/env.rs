@@ -32,7 +32,7 @@
 //! ```rust
 //! use wzs_web::config::env::EnvConfig;
 //!
-//! let env = EnvConfig::from_iter([
+//! let env = EnvConfig::from_pairs([
 //!     ("PUBLIC_CORS_ENABLED", "true"),
 //!     ("BCRYPT_COST", "4"),
 //! ]);
@@ -46,7 +46,7 @@
 //! ```rust
 //! use wzs_web::config::env::EnvConfig;
 //!
-//! let env = EnvConfig::from_iter([
+//! let env = EnvConfig::from_pairs([
 //!     ("PUBLIC_CORS_ENABLED", "true"),
 //!     ("PUBLIC_JWT_SECRET", "public-secret"),
 //!     ("ADMIN_JWT_SECRET", "admin-secret"),
@@ -85,7 +85,7 @@ use std::fmt;
 /// ```rust
 /// use wzs_web::config::env::EnvConfig;
 ///
-/// let env = EnvConfig::from_iter([
+/// let env = EnvConfig::from_pairs([
 ///     ("BCRYPT_COST", "4"),
 ///     ("FEATURE_ENABLED", "true"),
 /// ]);
@@ -109,25 +109,20 @@ impl EnvConfig {
     /// This makes the configuration effectively a snapshot of the environment
     /// at application startup.
     pub fn from_env() -> Self {
-        Self::from_iter(std::env::vars())
+        Self::from_pairs(std::env::vars())
     }
 
-    /// Creates an `EnvConfig` from key-value pairs.
+    /// Creates an environment snapshot from key-value pairs.
     ///
-    /// This constructor is particularly useful in tests because it does not
-    /// require modifying process-wide environment variables.
-    ///
-    /// Both keys and values may be any type convertible into [`String`].
-    ///
-    /// If the same key appears multiple times, the last value wins.
-    pub fn from_iter<I, K, V>(iter: I) -> Self
+    /// If the same key appears more than once, the last value wins.
+    pub fn from_pairs<I, K, V>(pairs: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: Into<String>,
         V: Into<String>,
     {
         Self {
-            values: iter
+            values: pairs
                 .into_iter()
                 .map(|(key, value)| (key.into(), value.into()))
                 .collect(),
@@ -164,7 +159,7 @@ impl EnvConfig {
     /// ```rust
     /// use wzs_web::config::env::EnvConfig;
     ///
-    /// let env = EnvConfig::from_iter([
+    /// let env = EnvConfig::from_pairs([
     ///     ("PUBLIC_JWT_SECRET", "public-secret"),
     ///     ("PUBLIC_CORS_ENABLED", "true"),
     ///     ("ADMIN_JWT_SECRET", "admin-secret"),
@@ -186,7 +181,7 @@ impl EnvConfig {
     /// );
     /// ```
     pub fn with_prefix(&self, prefix: &str) -> Self {
-        Self::from_iter(self.values.iter().filter_map(|(key, value)| {
+        Self::from_pairs(self.values.iter().filter_map(|(key, value)| {
             key.strip_prefix(prefix)
                 .map(|key| (key.to_string(), value.clone()))
         }))
@@ -358,7 +353,7 @@ mod tests {
 
     #[test]
     fn env_config_from_iter_stores_values() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("BCRYPT_COST", "4"),
             ("PUBLIC_WEB_BASE_URL", "https://example.com"),
         ]);
@@ -370,7 +365,7 @@ mod tests {
 
     #[test]
     fn env_config_from_iter_last_duplicate_value_wins() {
-        let env = EnvConfig::from_iter([("VALUE", "first"), ("VALUE", "second")]);
+        let env = EnvConfig::from_pairs([("VALUE", "first"), ("VALUE", "second")]);
 
         assert_eq!(env.get("VALUE"), Some("second"));
     }
@@ -389,7 +384,7 @@ mod tests {
 
     #[test]
     fn with_prefix_selects_matching_values() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("PUBLIC_JWT_SECRET", "public-secret"),
             ("PUBLIC_CORS_ENABLED", "true"),
             ("ADMIN_JWT_SECRET", "admin-secret"),
@@ -407,7 +402,7 @@ mod tests {
 
     #[test]
     fn with_prefix_removes_prefix_from_keys() {
-        let env = EnvConfig::from_iter([("PUBLIC_CORS_ORIGINS", "https://example.com")]);
+        let env = EnvConfig::from_pairs([("PUBLIC_CORS_ORIGINS", "https://example.com")]);
 
         let public_env = env.with_prefix("PUBLIC_");
 
@@ -418,7 +413,7 @@ mod tests {
 
     #[test]
     fn with_prefix_excludes_other_prefixes_and_unprefixed_values() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("PUBLIC_JWT_SECRET", "public-secret"),
             ("ADMIN_JWT_SECRET", "admin-secret"),
             ("JWT_SECRET", "legacy-secret"),
@@ -438,7 +433,7 @@ mod tests {
     #[test]
     fn with_prefix_returns_empty_config_when_no_values_match() {
         let env =
-            EnvConfig::from_iter([("ADMIN_JWT_SECRET", "admin-secret"), ("BCRYPT_COST", "12")]);
+            EnvConfig::from_pairs([("ADMIN_JWT_SECRET", "admin-secret"), ("BCRYPT_COST", "12")]);
 
         let public_env = env.with_prefix("PUBLIC_");
 
@@ -447,7 +442,7 @@ mod tests {
 
     #[test]
     fn with_prefix_does_not_modify_original_config() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("PUBLIC_JWT_SECRET", "public-secret"),
             ("ADMIN_JWT_SECRET", "admin-secret"),
         ]);
@@ -463,7 +458,7 @@ mod tests {
 
     #[test]
     fn with_prefix_preserves_empty_values() {
-        let env = EnvConfig::from_iter([("PUBLIC_JWT_SECRET", "")]);
+        let env = EnvConfig::from_pairs([("PUBLIC_JWT_SECRET", "")]);
 
         let public_env = env.with_prefix("PUBLIC_");
 
@@ -473,7 +468,7 @@ mod tests {
 
     #[test]
     fn with_prefix_can_create_independent_api_configs() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("PUBLIC_JWT_SECRET", "public-secret"),
             ("PUBLIC_CORS_ENABLED", "true"),
             ("ADMIN_JWT_SECRET", "admin-secret"),
@@ -498,7 +493,7 @@ mod tests {
 
     #[test]
     fn get_returns_existing_value() {
-        let env = EnvConfig::from_iter([("SCHOOL_YEAR", "2026")]);
+        let env = EnvConfig::from_pairs([("SCHOOL_YEAR", "2026")]);
 
         assert_eq!(env.get("SCHOOL_YEAR"), Some("2026"));
     }
@@ -512,14 +507,14 @@ mod tests {
 
     #[test]
     fn get_preserves_empty_value() {
-        let env = EnvConfig::from_iter([("EMPTY", "")]);
+        let env = EnvConfig::from_pairs([("EMPTY", "")]);
 
         assert_eq!(env.get("EMPTY"), Some(""));
     }
 
     #[test]
     fn get_string_returns_owned_value() {
-        let env = EnvConfig::from_iter([("VALUE", "hello")]);
+        let env = EnvConfig::from_pairs([("VALUE", "hello")]);
 
         let value = env.get_string("VALUE");
 
@@ -528,7 +523,7 @@ mod tests {
 
     #[test]
     fn contains_key_distinguishes_missing_from_empty() {
-        let env = EnvConfig::from_iter([("EMPTY", "")]);
+        let env = EnvConfig::from_pairs([("EMPTY", "")]);
 
         assert!(env.contains_key("EMPTY"));
         assert!(!env.contains_key("UNKNOWN"));
@@ -536,7 +531,7 @@ mod tests {
 
     #[test]
     fn len_returns_number_of_values() {
-        let env = EnvConfig::from_iter([("A", "1"), ("B", "2"), ("C", "3")]);
+        let env = EnvConfig::from_pairs([("A", "1"), ("B", "2"), ("C", "3")]);
 
         assert_eq!(env.len(), 3);
         assert!(!env.is_empty());
@@ -549,7 +544,7 @@ mod tests {
     #[test]
     fn get_bool_parses_true_variants() {
         for value in ["1", "true", "TRUE", "True", "yes", "YES", "on", "ON"] {
-            let env = EnvConfig::from_iter([("VALUE", value)]);
+            let env = EnvConfig::from_pairs([("VALUE", value)]);
 
             assert_eq!(
                 env.get_bool("VALUE"),
@@ -562,7 +557,7 @@ mod tests {
     #[test]
     fn get_bool_parses_false_variants() {
         for value in ["0", "false", "FALSE", "False", "no", "NO", "off", "OFF"] {
-            let env = EnvConfig::from_iter([("VALUE", value)]);
+            let env = EnvConfig::from_pairs([("VALUE", value)]);
 
             assert_eq!(
                 env.get_bool("VALUE"),
@@ -574,7 +569,7 @@ mod tests {
 
     #[test]
     fn get_bool_ignores_surrounding_whitespace() {
-        let env = EnvConfig::from_iter([("A", " true "), ("B", "\tfalse\n")]);
+        let env = EnvConfig::from_pairs([("A", " true "), ("B", "\tfalse\n")]);
 
         assert_eq!(env.get_bool("A"), Some(true));
         assert_eq!(env.get_bool("B"), Some(false));
@@ -582,7 +577,7 @@ mod tests {
 
     #[test]
     fn get_bool_supports_quoted_values() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("A", "\"true\""),
             ("B", "'yes'"),
             ("C", "\"false\""),
@@ -597,14 +592,14 @@ mod tests {
 
     #[test]
     fn get_bool_returns_none_for_invalid_value() {
-        let env = EnvConfig::from_iter([("VALUE", "not-a-bool")]);
+        let env = EnvConfig::from_pairs([("VALUE", "not-a-bool")]);
 
         assert_eq!(env.get_bool("VALUE"), None);
     }
 
     #[test]
     fn get_bool_returns_none_for_empty_value() {
-        let env = EnvConfig::from_iter([("VALUE", "")]);
+        let env = EnvConfig::from_pairs([("VALUE", "")]);
 
         assert_eq!(env.get_bool("VALUE"), None);
     }
@@ -622,42 +617,42 @@ mod tests {
 
     #[test]
     fn get_u16_parses_valid_value() {
-        let env = EnvConfig::from_iter([("PORT", "3000")]);
+        let env = EnvConfig::from_pairs([("PORT", "3000")]);
 
         assert_eq!(env.get_u16("PORT"), Some(3000));
     }
 
     #[test]
     fn get_u32_parses_valid_value() {
-        let env = EnvConfig::from_iter([("BCRYPT_COST", "12")]);
+        let env = EnvConfig::from_pairs([("BCRYPT_COST", "12")]);
 
         assert_eq!(env.get_u32("BCRYPT_COST"), Some(12));
     }
 
     #[test]
     fn get_u64_parses_valid_value() {
-        let env = EnvConfig::from_iter([("MAX_VALUE", "123456789")]);
+        let env = EnvConfig::from_pairs([("MAX_VALUE", "123456789")]);
 
         assert_eq!(env.get_u64("MAX_VALUE"), Some(123_456_789));
     }
 
     #[test]
     fn get_usize_parses_valid_value() {
-        let env = EnvConfig::from_iter([("MAX_BODY_BYTES", "5242880")]);
+        let env = EnvConfig::from_pairs([("MAX_BODY_BYTES", "5242880")]);
 
         assert_eq!(env.get_usize("MAX_BODY_BYTES"), Some(5_242_880));
     }
 
     #[test]
     fn numeric_getters_ignore_surrounding_whitespace() {
-        let env = EnvConfig::from_iter([("VALUE", " 42 ")]);
+        let env = EnvConfig::from_pairs([("VALUE", " 42 ")]);
 
         assert_eq!(env.get_u32("VALUE"), Some(42));
     }
 
     #[test]
     fn numeric_getters_return_none_for_invalid_value() {
-        let env = EnvConfig::from_iter([("VALUE", "not-a-number")]);
+        let env = EnvConfig::from_pairs([("VALUE", "not-a-number")]);
 
         assert_eq!(env.get_u16("VALUE"), None);
         assert_eq!(env.get_u32("VALUE"), None);
@@ -667,7 +662,7 @@ mod tests {
 
     #[test]
     fn numeric_getters_return_none_for_negative_value() {
-        let env = EnvConfig::from_iter([("VALUE", "-1")]);
+        let env = EnvConfig::from_pairs([("VALUE", "-1")]);
 
         assert_eq!(env.get_u16("VALUE"), None);
         assert_eq!(env.get_u32("VALUE"), None);
@@ -691,7 +686,7 @@ mod tests {
 
     #[test]
     fn debug_does_not_expose_values() {
-        let env = EnvConfig::from_iter([
+        let env = EnvConfig::from_pairs([
             ("JWT_SECRET", "super-secret-jwt-value"),
             ("SMTP_PASSWORD", "super-secret-password"),
         ]);
@@ -708,7 +703,7 @@ mod tests {
 
     #[test]
     fn debug_output_is_deterministic() {
-        let env = EnvConfig::from_iter([("Z_VALUE", "z"), ("A_VALUE", "a"), ("M_VALUE", "m")]);
+        let env = EnvConfig::from_pairs([("Z_VALUE", "z"), ("A_VALUE", "a"), ("M_VALUE", "m")]);
 
         let debug = format!("{env:?}");
 

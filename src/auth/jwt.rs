@@ -15,7 +15,7 @@
 //! - [`decode_jwt`] — Validate and decode a JWT token
 
 use chrono::{Duration, Utc};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 
 /// JWT claims stored inside the token payload.

@@ -36,7 +36,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use chrono::NaiveDateTime;
 use uuid::Uuid;
 
@@ -282,11 +282,9 @@ impl<'a> From<Option<&'a Uuid>> for Param<'a> {
 /// ```
 #[macro_export]
 macro_rules! params {
-    ($($x:expr),* $(,)?) => {{
-       let mut v = Vec::<Param>::new();
-       $(v.push(Param::from($x));)*
-          v
-    }};
+    ($($x:expr),* $(,)?) => {
+        vec![$(Param::from($x)),*]
+    };
 }
 
 // -----------------------------------------------------------------------------
@@ -580,7 +578,7 @@ mod tests {
     #[test]
     fn params_macro_accepts_f32_and_f64() {
         let x_f32: f32 = 1.5;
-        let x_f64: f64 = 3.14159;
+        let x_f64: f64 = 12.34567;
 
         let v = params![x_f32, x_f64];
 
@@ -591,7 +589,7 @@ mod tests {
 
         assert!(matches!(
            v[1],
-           Param::F64(f) if (f - 3.14159).abs() < 1e-12
+           Param::F64(f) if (f - 12.34567).abs() < 1e-12
         ));
     }
 
@@ -609,7 +607,7 @@ mod tests {
         r.insert("u64", Value::U64(7));
         r.insert("i64", Value::I64(-3));
         r.insert("f32", Value::F32(1.5));
-        r.insert("f64", Value::F64(3.14159));
+        r.insert("f64", Value::F64(12.34567));
         r.insert("bool", Value::Bool(true));
         r.insert("str", Value::Str("hello".into()));
         r.insert("dt", Value::DateTime(dt));
@@ -619,7 +617,7 @@ mod tests {
         assert_eq!(r.get_u64("u64").unwrap(), 7);
         assert_eq!(r.get_i64("i64").unwrap(), -3);
         assert!((r.get_f32("f32").unwrap() - 1.5).abs() < 1e-6);
-        assert!((r.get_f64("f64").unwrap() - 3.14159).abs() < 1e-12);
+        assert!((r.get_f64("f64").unwrap() - 12.34567).abs() < 1e-12);
         assert!(r.get_bool("bool").unwrap());
         assert_eq!(r.get_string("str").unwrap(), "hello");
         assert_eq!(r.get_datetime("dt").unwrap(), dt);
@@ -858,118 +856,136 @@ mod tests {
         r.insert("bin", Value::Bool(true));
         r.insert("uuid", Value::Str("not-a-uuid".into()));
 
-        assert!(r
-            .get_u64_opt("u64")
-            .unwrap_err()
-            .to_string()
-            .contains("is not U64/NULL"));
+        assert!(
+            r.get_u64_opt("u64")
+                .unwrap_err()
+                .to_string()
+                .contains("is not U64/NULL")
+        );
 
-        assert!(r
-            .get_i64_opt("i64")
-            .unwrap_err()
-            .to_string()
-            .contains("is not I64/NULL"));
+        assert!(
+            r.get_i64_opt("i64")
+                .unwrap_err()
+                .to_string()
+                .contains("is not I64/NULL")
+        );
 
-        assert!(r
-            .get_f32_opt("f32")
-            .unwrap_err()
-            .to_string()
-            .contains("is not F32/NULL"));
+        assert!(
+            r.get_f32_opt("f32")
+                .unwrap_err()
+                .to_string()
+                .contains("is not F32/NULL")
+        );
 
-        assert!(r
-            .get_f64_opt("f64")
-            .unwrap_err()
-            .to_string()
-            .contains("is not F64/NULL"));
+        assert!(
+            r.get_f64_opt("f64")
+                .unwrap_err()
+                .to_string()
+                .contains("is not F64/NULL")
+        );
 
-        assert!(r
-            .get_bool_opt("bool")
-            .unwrap_err()
-            .to_string()
-            .contains("is not Bool/NULL"));
+        assert!(
+            r.get_bool_opt("bool")
+                .unwrap_err()
+                .to_string()
+                .contains("is not Bool/NULL")
+        );
 
-        assert!(r
-            .get_string_opt("str")
-            .unwrap_err()
-            .to_string()
-            .contains("is not String/NULL"));
+        assert!(
+            r.get_string_opt("str")
+                .unwrap_err()
+                .to_string()
+                .contains("is not String/NULL")
+        );
 
-        assert!(r
-            .get_datetime_opt("dt")
-            .unwrap_err()
-            .to_string()
-            .contains("is not DateTime/NULL"));
+        assert!(
+            r.get_datetime_opt("dt")
+                .unwrap_err()
+                .to_string()
+                .contains("is not DateTime/NULL")
+        );
 
-        assert!(r
-            .get_bin_opt("bin")
-            .unwrap_err()
-            .to_string()
-            .contains("is not Bin/NULL"));
+        assert!(
+            r.get_bin_opt("bin")
+                .unwrap_err()
+                .to_string()
+                .contains("is not Bin/NULL")
+        );
 
-        assert!(r
-            .get_uuid_opt("uuid")
-            .unwrap_err()
-            .to_string()
-            .contains("is not UUID/NULL"));
+        assert!(
+            r.get_uuid_opt("uuid")
+                .unwrap_err()
+                .to_string()
+                .contains("is not UUID/NULL")
+        );
     }
 
     #[test]
     fn row_optional_getters_error_when_column_is_missing() {
         let r = Row::default();
 
-        assert!(r
-            .get_u64_opt("missing")
-            .unwrap_err()
-            .to_string()
-            .contains("column `missing` not found"));
+        assert!(
+            r.get_u64_opt("missing")
+                .unwrap_err()
+                .to_string()
+                .contains("column `missing` not found")
+        );
 
-        assert!(r
-            .get_i64_opt("missing")
-            .unwrap_err()
-            .to_string()
-            .contains("column `missing` not found"));
+        assert!(
+            r.get_i64_opt("missing")
+                .unwrap_err()
+                .to_string()
+                .contains("column `missing` not found")
+        );
 
-        assert!(r
-            .get_f32_opt("missing")
-            .unwrap_err()
-            .to_string()
-            .contains("column `missing` not found"));
+        assert!(
+            r.get_f32_opt("missing")
+                .unwrap_err()
+                .to_string()
+                .contains("column `missing` not found")
+        );
 
-        assert!(r
-            .get_f64_opt("missing")
-            .unwrap_err()
-            .to_string()
-            .contains("column `missing` not found"));
+        assert!(
+            r.get_f64_opt("missing")
+                .unwrap_err()
+                .to_string()
+                .contains("column `missing` not found")
+        );
 
-        assert!(r
-            .get_bool_opt("missing")
-            .unwrap_err()
-            .to_string()
-            .contains("column `missing` not found"));
+        assert!(
+            r.get_bool_opt("missing")
+                .unwrap_err()
+                .to_string()
+                .contains("column `missing` not found")
+        );
 
-        assert!(r
-            .get_string_opt("missing")
-            .unwrap_err()
-            .to_string()
-            .contains("column `missing` not found"));
+        assert!(
+            r.get_string_opt("missing")
+                .unwrap_err()
+                .to_string()
+                .contains("column `missing` not found")
+        );
 
-        assert!(r
-            .get_datetime_opt("missing")
-            .unwrap_err()
-            .to_string()
-            .contains("column `missing` not found"));
+        assert!(
+            r.get_datetime_opt("missing")
+                .unwrap_err()
+                .to_string()
+                .contains("column `missing` not found")
+        );
 
-        assert!(r
-            .get_bin_opt("missing")
-            .unwrap_err()
-            .to_string()
-            .contains("column `missing` not found"));
+        assert!(
+            r.get_bin_opt("missing")
+                .unwrap_err()
+                .to_string()
+                .contains("column `missing` not found")
+        );
 
-        assert!(r
-            .get_uuid_opt("missing")
-            .unwrap_err()
-            .to_string()
-            .contains("column `missing` not found"));
+        assert!(
+            r.get_uuid_opt("missing")
+                .unwrap_err()
+                .to_string()
+                .contains("column `missing` not found")
+        );
     }
 
     #[test]
@@ -1007,52 +1023,60 @@ mod tests {
         r.insert("dt", Value::Str("2026-09-13".into()));
         r.insert("bin", Value::Bool(true));
 
-        assert!(r
-            .get_u64("u64")
-            .unwrap_err()
-            .to_string()
-            .contains("is not U64"));
+        assert!(
+            r.get_u64("u64")
+                .unwrap_err()
+                .to_string()
+                .contains("is not U64")
+        );
 
-        assert!(r
-            .get_i64("i64")
-            .unwrap_err()
-            .to_string()
-            .contains("is not I64"));
+        assert!(
+            r.get_i64("i64")
+                .unwrap_err()
+                .to_string()
+                .contains("is not I64")
+        );
 
-        assert!(r
-            .get_f32("f32")
-            .unwrap_err()
-            .to_string()
-            .contains("is not F32"));
+        assert!(
+            r.get_f32("f32")
+                .unwrap_err()
+                .to_string()
+                .contains("is not F32")
+        );
 
-        assert!(r
-            .get_f64("f64")
-            .unwrap_err()
-            .to_string()
-            .contains("is not F64"));
+        assert!(
+            r.get_f64("f64")
+                .unwrap_err()
+                .to_string()
+                .contains("is not F64")
+        );
 
-        assert!(r
-            .get_bool("bool")
-            .unwrap_err()
-            .to_string()
-            .contains("is not Bool"));
+        assert!(
+            r.get_bool("bool")
+                .unwrap_err()
+                .to_string()
+                .contains("is not Bool")
+        );
 
-        assert!(r
-            .get_string("str")
-            .unwrap_err()
-            .to_string()
-            .contains("is not String"));
+        assert!(
+            r.get_string("str")
+                .unwrap_err()
+                .to_string()
+                .contains("is not String")
+        );
 
-        assert!(r
-            .get_datetime("dt")
-            .unwrap_err()
-            .to_string()
-            .contains("is not DateTime"));
+        assert!(
+            r.get_datetime("dt")
+                .unwrap_err()
+                .to_string()
+                .contains("is not DateTime")
+        );
 
-        assert!(r
-            .get_bin("bin")
-            .unwrap_err()
-            .to_string()
-            .contains("is not Bin"));
+        assert!(
+            r.get_bin("bin")
+                .unwrap_err()
+                .to_string()
+                .contains("is not Bin")
+        );
     }
 }
