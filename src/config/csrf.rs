@@ -1,7 +1,7 @@
 //! # CSRF Configuration
 //!
 //! Provides configuration for CSRF (Cross-Site Request Forgery) protection,
-//! including secret key management and cookie security flags.
+//! including secret key management, cookie naming, and cookie security flags.
 //!
 //! CSRF configuration can be built either from the current process environment,
 //! from an [`EnvConfig`] environment snapshot, or from a custom environment
@@ -10,8 +10,14 @@
 //! The following environment variables are supported:
 //!
 //! - `CSRF_SECRET` — base string used to derive a 32-byte secret
+//! - `CSRF_COOKIE_NAME` — CSRF cookie name (default: `csrf`)
 //! - `CSRF_COOKIE_SECURE` — enables the `Secure` cookie flag (default: `true`)
-//! - `CSRF_COOKIE_HTTPONLY` — enables the `HttpOnly` cookie flag (default: `true`)
+//! - `CSRF_COOKIE_HTTP_ONLY` — enables the `HttpOnly` cookie flag (default: `true`)
+//! - `CSRF_COOKIE_HTTPONLY` — deprecated alias of `CSRF_COOKIE_HTTP_ONLY`
+//!
+//! When both HttpOnly variables are present, `CSRF_COOKIE_HTTP_ONLY` takes
+//! precedence. The deprecated alias remains supported for backward
+//! compatibility.
 //!
 //! If `CSRF_SECRET` is missing, a random 32-byte secret is generated.
 //!
@@ -35,8 +41,9 @@
 //!
 //! let env = EnvConfig::from_pairs([
 //!     ("CSRF_SECRET", "my-top-secret"),
+//!     ("CSRF_COOKIE_NAME", "public_csrf"),
 //!     ("CSRF_COOKIE_SECURE", "false"),
-//!     ("CSRF_COOKIE_HTTPONLY", "true"),
+//!     ("CSRF_COOKIE_HTTP_ONLY", "true"),
 //! ]);
 //!
 //! let cfg = CsrfConfig::from_env_config(&env);
@@ -45,6 +52,7 @@
 //!     cfg.secret,
 //!     derive_secret_from_string("my-top-secret")
 //! );
+//! assert_eq!(cfg.cookie_name, "public_csrf");
 //! assert!(!cfg.cookie_secure);
 //! assert!(cfg.cookie_http_only);
 //! ```
@@ -56,9 +64,12 @@ use sha2::{Digest, Sha256};
 
 use crate::config::env::EnvConfig;
 
+/// Default name used for the CSRF cookie.
+pub const DEFAULT_CSRF_COOKIE_NAME: &str = "csrf";
+
 /// Configuration for CSRF protection.
 ///
-/// Controls secret key generation and cookie security flags.
+/// Controls secret key generation, cookie naming, and cookie security flags.
 ///
 /// `CsrfConfig` can be constructed from:
 ///
@@ -69,6 +80,13 @@ use crate::config::env::EnvConfig;
 pub struct CsrfConfig {
     /// Secret key used for CSRF token signing.
     pub secret: [u8; 32],
+
+    /// Name of the cookie that stores the CSRF token.
+    ///
+    /// Defaults to [`DEFAULT_CSRF_COOKIE_NAME`]. Leading and trailing
+    /// whitespace is removed. An empty or whitespace-only value also falls
+    /// back to the default.
+    pub cookie_name: String,
 
     /// Whether the CSRF cookie uses the `Secure` flag.
     ///
@@ -101,8 +119,11 @@ impl CsrfConfig {
     ///
     /// If `CSRF_SECRET` is missing, a random 32-byte secret is generated.
     ///
-    /// `CSRF_COOKIE_SECURE` and `CSRF_COOKIE_HTTPONLY` default to `true` when
-    /// missing.
+    /// `CSRF_COOKIE_NAME` defaults to [`DEFAULT_CSRF_COOKIE_NAME`].
+    ///
+    /// `CSRF_COOKIE_SECURE` and `CSRF_COOKIE_HTTP_ONLY` default to `true` when
+    /// missing. The deprecated `CSRF_COOKIE_HTTPONLY` name is accepted when
+    /// `CSRF_COOKIE_HTTP_ONLY` is absent.
     ///
     /// For compatibility with the existing behavior, an explicitly supplied
     /// value is `true` only when it is one of the recognized truthy values.
@@ -116,12 +137,14 @@ impl CsrfConfig {
     ///
     /// let env = EnvConfig::from_pairs([
     ///     ("CSRF_SECRET", "my-top-secret"),
+    ///     ("CSRF_COOKIE_NAME", "public_csrf"),
     ///     ("CSRF_COOKIE_SECURE", "false"),
-    ///     ("CSRF_COOKIE_HTTPONLY", "true"),
+    ///     ("CSRF_COOKIE_HTTP_ONLY", "true"),
     /// ]);
     ///
     /// let cfg = CsrfConfig::from_env_config(&env);
     ///
+    /// assert_eq!(cfg.cookie_name, "public_csrf");
     /// assert!(!cfg.cookie_secure);
     /// assert!(cfg.cookie_http_only);
     /// ```
@@ -136,7 +159,8 @@ impl CsrfConfig {
     ///
     /// If `CSRF_SECRET` is missing, a random secret is generated.
     ///
-    /// Cookie flags default to `true` when missing.
+    /// The cookie name defaults to [`DEFAULT_CSRF_COOKIE_NAME`] and cookie
+    /// flags default to `true` when missing.
     pub fn from_env_with<F>(get: F) -> Self
     where
         F: Fn(&str) -> Option<String>,
@@ -146,18 +170,27 @@ impl CsrfConfig {
             _ => random_secret(),
         };
 
+        let cookie_name = get("CSRF_COOKIE_NAME")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| DEFAULT_CSRF_COOKIE_NAME.to_string());
+
         let cookie_secure = get("CSRF_COOKIE_SECURE")
             .as_deref()
             .map(is_truthy)
             .unwrap_or(true);
 
-        let cookie_http_only = get("CSRF_COOKIE_HTTPONLY")
+        // Prefer the consistently separated name. Keep the previous spelling
+        // as a fallback so existing deployments continue to work.
+        let cookie_http_only = get("CSRF_COOKIE_HTTP_ONLY")
+            .or_else(|| get("CSRF_COOKIE_HTTPONLY"))
             .as_deref()
             .map(is_truthy)
             .unwrap_or(true);
 
         Self {
             secret,
+            cookie_name,
             cookie_secure,
             cookie_http_only,
         }
@@ -172,6 +205,7 @@ impl fmt::Debug for CsrfConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CsrfConfig")
             .field("secret", &"[REDACTED]")
+            .field("cookie_name", &self.cookie_name)
             .field("cookie_secure", &self.cookie_secure)
             .field("cookie_http_only", &self.cookie_http_only)
             .finish()
@@ -251,6 +285,7 @@ mod tests {
         let cfg = CsrfConfig::from_env_config(&env);
 
         assert_eq!(cfg.secret.len(), 32);
+        assert_eq!(cfg.cookie_name, DEFAULT_CSRF_COOKIE_NAME);
         assert!(cfg.cookie_secure);
         assert!(cfg.cookie_http_only);
     }
@@ -259,13 +294,15 @@ mod tests {
     fn from_env_config_respects_secret_and_flags() {
         let env = EnvConfig::from_pairs([
             ("CSRF_SECRET", "my-top-secret"),
+            ("CSRF_COOKIE_NAME", "public_csrf"),
             ("CSRF_COOKIE_SECURE", "false"),
-            ("CSRF_COOKIE_HTTPONLY", "0"),
+            ("CSRF_COOKIE_HTTP_ONLY", "0"),
         ]);
 
         let cfg = CsrfConfig::from_env_config(&env);
 
         assert_eq!(cfg.secret, derive_secret_from_string("my-top-secret"));
+        assert_eq!(cfg.cookie_name, "public_csrf");
         assert!(!cfg.cookie_secure);
         assert!(!cfg.cookie_http_only);
     }
@@ -304,11 +341,43 @@ mod tests {
     }
 
     #[test]
+    fn from_env_config_defaults_cookie_name_when_missing() {
+        let env = EnvConfig::default();
+
+        let cfg = CsrfConfig::from_env_config(&env);
+
+        assert_eq!(cfg.cookie_name, DEFAULT_CSRF_COOKIE_NAME);
+    }
+
+    #[test]
+    fn from_env_config_loads_and_trims_cookie_name() {
+        let env = EnvConfig::from_pairs([("CSRF_COOKIE_NAME", "  public_csrf  ")]);
+
+        let cfg = CsrfConfig::from_env_config(&env);
+
+        assert_eq!(cfg.cookie_name, "public_csrf");
+    }
+
+    #[test]
+    fn from_env_config_defaults_cookie_name_when_empty() {
+        for value in ["", " ", "   ", "\t", "\n"] {
+            let env = EnvConfig::from_pairs([("CSRF_COOKIE_NAME", value)]);
+
+            let cfg = CsrfConfig::from_env_config(&env);
+
+            assert_eq!(
+                cfg.cookie_name, DEFAULT_CSRF_COOKIE_NAME,
+                "Expected the default cookie name for {value:?}"
+            );
+        }
+    }
+
+    #[test]
     fn from_env_config_accepts_truthy_cookie_flags() {
         for value in ["1", "true", "TRUE", "Yes", " on  "] {
             let env = EnvConfig::from_pairs([
                 ("CSRF_COOKIE_SECURE", value),
-                ("CSRF_COOKIE_HTTPONLY", value),
+                ("CSRF_COOKIE_HTTP_ONLY", value),
             ]);
 
             let cfg = CsrfConfig::from_env_config(&env);
@@ -330,7 +399,7 @@ mod tests {
         for value in ["0", "false", "no", "off", "", "  "] {
             let env = EnvConfig::from_pairs([
                 ("CSRF_COOKIE_SECURE", value),
-                ("CSRF_COOKIE_HTTPONLY", value),
+                ("CSRF_COOKIE_HTTP_ONLY", value),
             ]);
 
             let cfg = CsrfConfig::from_env_config(&env);
@@ -351,7 +420,7 @@ mod tests {
     fn from_env_config_preserves_legacy_behavior_for_invalid_flags() {
         let env = EnvConfig::from_pairs([
             ("CSRF_COOKIE_SECURE", "invalid"),
-            ("CSRF_COOKIE_HTTPONLY", "invalid"),
+            ("CSRF_COOKIE_HTTP_ONLY", "invalid"),
         ]);
 
         let cfg = CsrfConfig::from_env_config(&env);
@@ -365,6 +434,7 @@ mod tests {
         let cfg = CsrfConfig::from_env_with(|_| None);
 
         assert_eq!(cfg.secret.len(), 32);
+        assert_eq!(cfg.cookie_name, DEFAULT_CSRF_COOKIE_NAME);
         assert!(cfg.cookie_secure);
         assert!(cfg.cookie_http_only);
     }
@@ -373,14 +443,37 @@ mod tests {
     fn from_env_with_respects_secret_and_flags() {
         let env = EnvConfig::from_pairs([
             ("CSRF_SECRET", "my-top-secret"),
+            ("CSRF_COOKIE_NAME", "public_csrf"),
             ("CSRF_COOKIE_SECURE", "false"),
-            ("CSRF_COOKIE_HTTPONLY", "0"),
+            ("CSRF_COOKIE_HTTP_ONLY", "0"),
         ]);
 
         let cfg = CsrfConfig::from_env_with(|key| env.get_string(key));
 
         assert_eq!(cfg.secret, derive_secret_from_string("my-top-secret"));
+        assert_eq!(cfg.cookie_name, "public_csrf");
         assert!(!cfg.cookie_secure);
+        assert!(!cfg.cookie_http_only);
+    }
+
+    #[test]
+    fn from_env_config_supports_legacy_http_only_name() {
+        let env = EnvConfig::from_pairs([("CSRF_COOKIE_HTTPONLY", "false")]);
+
+        let cfg = CsrfConfig::from_env_config(&env);
+
+        assert!(!cfg.cookie_http_only);
+    }
+
+    #[test]
+    fn canonical_http_only_name_takes_precedence_over_legacy_name() {
+        let env = EnvConfig::from_pairs([
+            ("CSRF_COOKIE_HTTP_ONLY", "false"),
+            ("CSRF_COOKIE_HTTPONLY", "true"),
+        ]);
+
+        let cfg = CsrfConfig::from_env_config(&env);
+
         assert!(!cfg.cookie_http_only);
     }
 
@@ -441,8 +534,9 @@ mod tests {
     fn debug_redacts_csrf_secret() {
         let env = EnvConfig::from_pairs([
             ("CSRF_SECRET", "super-secret-csrf-value"),
+            ("CSRF_COOKIE_NAME", "public_csrf"),
             ("CSRF_COOKIE_SECURE", "false"),
-            ("CSRF_COOKIE_HTTPONLY", "true"),
+            ("CSRF_COOKIE_HTTP_ONLY", "true"),
         ]);
 
         let cfg = CsrfConfig::from_env_config(&env);
@@ -452,6 +546,9 @@ mod tests {
         assert!(debug.contains("[REDACTED]"));
 
         assert!(!debug.contains("super-secret-csrf-value"));
+
+        assert!(debug.contains("cookie_name"));
+        assert!(debug.contains("public_csrf"));
 
         assert!(debug.contains("cookie_secure"));
         assert!(debug.contains("false"));
@@ -466,6 +563,7 @@ mod tests {
 
         let cfg = CsrfConfig {
             secret,
+            cookie_name: DEFAULT_CSRF_COOKIE_NAME.to_string(),
             cookie_secure: true,
             cookie_http_only: true,
         };

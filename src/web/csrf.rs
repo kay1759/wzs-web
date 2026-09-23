@@ -11,7 +11,7 @@
 //!
 //! - Nonce and MAC are 32 bytes each
 //! - Encoded using Base64 (URL-safe, no padding)
-//! - Tokens are stored in both a cookie and an HTTP header for verification
+//! - Tokens are stored in the configured cookie and an HTTP header for verification
 //!
 //! # Endpoints
 //! The included [`csrf_handler`] can be mounted at `/csrf` to issue or refresh CSRF tokens.
@@ -48,7 +48,12 @@ use subtle::ConstantTimeEq;
 
 use crate::config::csrf::CsrfConfig;
 
-/// Cookie name used to store the CSRF token.
+/// Default cookie name used by [`set_csrf_cookie_with_flags`].
+///
+/// Application code should normally use [`set_csrf_cookie`], which reads the
+/// cookie name from [`CsrfConfig::cookie_name`]. This constant remains public
+/// for backward compatibility and for applications that intentionally use the
+/// default name.
 pub const CSRF_COOKIE_NAME: &str = "csrf";
 
 /// HTTP header name used for CSRF verification.
@@ -117,17 +122,38 @@ pub fn verify_token(cfg: &CsrfConfig, token: &str) -> bool {
 
 /// Sets a signed CSRF cookie using configuration flags (`Secure`, `HttpOnly`).
 pub fn set_csrf_cookie(jar: CookieJar, cfg: &CsrfConfig, token: &str) -> CookieJar {
-    set_csrf_cookie_with_flags(jar, token, cfg.cookie_secure, cfg.cookie_http_only)
+    set_csrf_cookie_with_name_and_flags(
+        jar,
+        &cfg.cookie_name,
+        token,
+        cfg.cookie_secure,
+        cfg.cookie_http_only,
+    )
 }
 
-/// Adds a CSRF cookie with explicit security flags.
+/// Adds a CSRF cookie using the default name and explicit security flags.
+///
+/// This function is retained for backward compatibility. Use
+/// [`set_csrf_cookie_with_name_and_flags`] when selecting the cookie name
+/// explicitly, or [`set_csrf_cookie`] when using [`CsrfConfig`].
 pub fn set_csrf_cookie_with_flags(
     jar: CookieJar,
     token: &str,
     secure: bool,
     http_only: bool,
 ) -> CookieJar {
-    let cookie = Cookie::build((CSRF_COOKIE_NAME, token.to_string()))
+    set_csrf_cookie_with_name_and_flags(jar, CSRF_COOKIE_NAME, token, secure, http_only)
+}
+
+/// Adds a CSRF cookie with an explicit name and security flags.
+pub fn set_csrf_cookie_with_name_and_flags(
+    jar: CookieJar,
+    cookie_name: &str,
+    token: &str,
+    secure: bool,
+    http_only: bool,
+) -> CookieJar {
+    let cookie = Cookie::build((cookie_name.to_owned(), token.to_string()))
         .path("/")
         .same_site(SameSite::Lax)
         .secure(secure)
@@ -145,12 +171,12 @@ pub fn set_csrf_cookie_with_flags(
 /// use axum_extra::extract::cookie::{Cookie, CookieJar};
 /// use axum::http::{HeaderMap, HeaderValue};
 /// use wzs_web::config::csrf::CsrfConfig;
-/// use wzs_web::web::csrf::{generate_csrf_token, validate_csrf, CSRF_COOKIE_NAME, CSRF_HEADER_NAME};
+/// use wzs_web::web::csrf::{generate_csrf_token, validate_csrf, CSRF_HEADER_NAME};
 ///
 /// let cfg = CsrfConfig::from_env();
 /// let token = generate_csrf_token(&cfg);
 ///
-/// let jar = CookieJar::new().add(Cookie::new(CSRF_COOKIE_NAME, token.clone()));
+/// let jar = CookieJar::new().add(Cookie::new(cfg.cookie_name.clone(), token.clone()));
 ///
 /// let mut headers = HeaderMap::new();
 /// headers.insert(CSRF_HEADER_NAME, HeaderValue::from_str(&token).unwrap());
@@ -165,7 +191,7 @@ pub fn validate_csrf(headers: &HeaderMap, jar: &CookieJar, cfg: &CsrfConfig) -> 
     else {
         return false;
     };
-    let Some(cookie_token) = jar.get(CSRF_COOKIE_NAME).map(|c| c.value().to_string()) else {
+    let Some(cookie_token) = jar.get(&cfg.cookie_name).map(|c| c.value().to_string()) else {
         return false;
     };
 
@@ -210,7 +236,7 @@ pub async fn csrf_handler(
     jar: CookieJar,
 ) -> (CookieJar, (StatusCode, HeaderMap, Json<CsrfResponse>)) {
     let token = match jar
-        .get(CSRF_COOKIE_NAME)
+        .get(&cfg.cookie_name)
         .map(|c| c.value().to_string())
         .filter(|t| verify_token(&cfg, t))
     {
@@ -245,6 +271,7 @@ mod tests {
     fn test_cfg() -> CsrfConfig {
         CsrfConfig {
             secret: derive_secret_from_string("test-fixed-secret"),
+            cookie_name: "test_csrf".to_string(),
             cookie_secure: true,
             cookie_http_only: true,
         }
@@ -313,7 +340,7 @@ mod tests {
         let jar = CookieJar::new();
         let jar = set_csrf_cookie(jar, &cfg, &token);
 
-        let c = jar.get(CSRF_COOKIE_NAME).expect("cookie set");
+        let c = jar.get(&cfg.cookie_name).expect("cookie set");
         assert_eq!(c.value(), token);
         assert_eq!(c.path(), Some("/"));
         assert_eq!(c.same_site(), Some(SameSite::Lax));
@@ -328,12 +355,29 @@ mod tests {
     }
 
     #[test]
+    fn set_cookie_with_name_and_flags_uses_requested_name() {
+        let jar = set_csrf_cookie_with_name_and_flags(
+            CookieJar::new(),
+            "admin_csrf",
+            "token",
+            false,
+            true,
+        );
+
+        assert!(jar.get(CSRF_COOKIE_NAME).is_none());
+        let cookie = jar.get("admin_csrf").expect("custom cookie set");
+        assert_eq!(cookie.value(), "token");
+        assert_eq!(cookie.secure(), Some(false));
+        assert_eq!(cookie.http_only(), Some(true));
+    }
+
+    #[test]
     fn validate_csrf_happy_path() {
         let cfg = test_cfg();
         let token = generate_csrf_token(&cfg);
 
         let jar = CookieJar::new().add(
-            Cookie::build((CSRF_COOKIE_NAME, token.clone()))
+            Cookie::build((cfg.cookie_name.clone(), token.clone()))
                 .path("/")
                 .same_site(SameSite::Lax)
                 .secure(true)
@@ -356,7 +400,7 @@ mod tests {
         let t1 = generate_csrf_token(&cfg);
         let t2 = generate_csrf_token(&cfg);
 
-        let jar = CookieJar::new().add(Cookie::new(CSRF_COOKIE_NAME, t1));
+        let jar = CookieJar::new().add(Cookie::new(cfg.cookie_name.clone(), t1));
 
         let mut headers = HeaderMap::new();
         headers.insert(CSRF_HEADER_NAME, HeaderValue::from_str(&t2).unwrap());
@@ -365,10 +409,25 @@ mod tests {
     }
 
     #[test]
+    fn validate_csrf_ignores_cookie_with_a_different_name() {
+        let cfg = test_cfg();
+        let token = generate_csrf_token(&cfg);
+        let jar = CookieJar::new().add(Cookie::new(CSRF_COOKIE_NAME, token.clone()));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CSRF_HEADER_NAME,
+            HeaderValue::from_str(&token).expect("header"),
+        );
+
+        assert!(!validate_csrf(&headers, &jar, &cfg));
+    }
+
+    #[test]
     fn validate_csrf_rejects_missing_or_empty_header() {
         let cfg = test_cfg();
         let token = generate_csrf_token(&cfg);
-        let jar = CookieJar::new().add(Cookie::new(CSRF_COOKIE_NAME, token));
+        let jar = CookieJar::new().add(Cookie::new(cfg.cookie_name.clone(), token));
 
         let headers = HeaderMap::new();
         assert!(!validate_csrf(&headers, &jar, &cfg));
@@ -387,7 +446,7 @@ mod tests {
             + "."
             + &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0u8; 32]);
 
-        let jar = CookieJar::new().add(Cookie::new(CSRF_COOKIE_NAME, bogus.clone()));
+        let jar = CookieJar::new().add(Cookie::new(cfg.cookie_name.clone(), bogus.clone()));
         let mut headers = HeaderMap::new();
         headers.insert(CSRF_HEADER_NAME, HeaderValue::from_str(&bogus).unwrap());
 
@@ -429,7 +488,7 @@ mod tests {
             "application/json"
         );
 
-        let cookie = jar_after.get(CSRF_COOKIE_NAME).expect("csrf cookie set");
+        let cookie = jar_after.get(&cfg.cookie_name).expect("csrf cookie set");
         assert_eq!(cookie.path(), Some("/"));
         assert_eq!(cookie.same_site(), Some(SameSite::Lax));
         assert_eq!(cookie.secure(), Some(cfg.cookie_secure));
@@ -442,7 +501,7 @@ mod tests {
 
         let preset = generate_csrf_token(&cfg);
         let jar = CookieJar::new().add(
-            Cookie::build((CSRF_COOKIE_NAME, preset.clone()))
+            Cookie::build((cfg.cookie_name.clone(), preset.clone()))
                 .path("/")
                 .same_site(SameSite::Lax)
                 .secure(cfg.cookie_secure)
@@ -466,12 +525,12 @@ mod tests {
             + "."
             + &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0u8; 32]);
 
-        let jar = CookieJar::new().add(Cookie::new(CSRF_COOKIE_NAME, invalid));
+        let jar = CookieJar::new().add(Cookie::new(cfg.cookie_name.clone(), invalid));
 
         let (jar_after, (_status, _headers, body)) =
             csrf_handler(Extension(cfg.clone()), jar).await;
 
-        let cookie = jar_after.get(CSRF_COOKIE_NAME).expect("refreshed cookie");
+        let cookie = jar_after.get(&cfg.cookie_name).expect("refreshed cookie");
         assert_eq!(cookie.value(), body.csrf_token);
         assert!(verify_token(&cfg, cookie.value()));
     }

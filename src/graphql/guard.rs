@@ -42,7 +42,7 @@ mod tests {
     use axum::http::HeaderMap;
     use axum_extra::extract::cookie::CookieJar;
 
-    use crate::config::csrf::CsrfConfig;
+    use crate::config::csrf::{CsrfConfig, DEFAULT_CSRF_COOKIE_NAME};
 
     fn empty_headers() -> HeaderMap {
         HeaderMap::new()
@@ -53,10 +53,11 @@ mod tests {
     }
 
     fn test_csrf_config() -> CsrfConfig {
-        // Deterministic secret for testing purposes.
-        // The actual value does not matter as long as it is 32 bytes.
+        // Keep every value deterministic so failures in guard behavior are
+        // independent of environment variables and random secret generation.
         CsrfConfig {
             secret: [0u8; 32],
+            cookie_name: DEFAULT_CSRF_COOKIE_NAME.to_string(),
             cookie_secure: false,
             cookie_http_only: true,
         }
