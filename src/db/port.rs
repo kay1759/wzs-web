@@ -8,6 +8,7 @@
 //! - [`Param`]: SQL parameter values passed to database adapters.
 //! - [`Value`]: Generic owned values returned from database adapters.
 //! - [`Row`]: A database row represented as a column-name/value map.
+//! - [`DbTransaction`]: Operations performed on one database transaction.
 //! - [`Db`]: A minimal synchronous database abstraction.
 //!
 //! # Example
@@ -555,6 +556,48 @@ pub trait Db: Send + Sync + 'static {
 
     /// Executes an insert and returns the database-generated last insert ID.
     fn exec_returning_last_insert_id(&self, sql: &str, params: &[Param]) -> Result<u64>;
+
+    /// Executes multiple database operations in a single transaction.
+    ///
+    /// The callback receives a transaction-scoped database port. All calls
+    /// made through that port use the same database connection.
+    ///
+    /// The transaction is committed when the callback returns `Ok(())` and
+    /// rolled back when it returns `Err`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when starting, executing, committing, or rolling back
+    /// the transaction fails.
+    fn transaction(
+        &self,
+        _operation: &mut dyn FnMut(&mut dyn DbTransaction) -> Result<()>,
+    ) -> Result<()> {
+        bail!("transactions are not supported by this database adapter")
+    }
+}
+
+/// Synchronous operations bound to one database transaction.
+///
+/// Unlike [`Db`], an implementation of this trait must not acquire a new
+/// connection for each method call. Every operation uses the connection on
+/// which the transaction was started.
+///
+/// This trait intentionally does not expose `commit` or `rollback`. The
+/// [`Db::transaction`] implementation owns that lifecycle so callers cannot
+/// accidentally leave a transaction open.
+pub trait DbTransaction {
+    /// Executes a query expected to return zero or one row.
+    fn fetch_one(&mut self, sql: &str, params: &[Param]) -> Result<Option<Row>>;
+
+    /// Executes a query and returns all rows.
+    fn fetch_all(&mut self, sql: &str, params: &[Param]) -> Result<Vec<Row>>;
+
+    /// Executes a write operation and returns the affected-row count.
+    fn exec(&mut self, sql: &str, params: &[Param]) -> Result<u64>;
+
+    /// Executes an insert and returns the generated last insert ID.
+    fn exec_returning_last_insert_id(&mut self, sql: &str, params: &[Param]) -> Result<u64>;
 }
 
 #[cfg(test)]
@@ -583,13 +626,13 @@ mod tests {
         let v = params![x_f32, x_f64];
 
         assert!(matches!(
-           v[0],
-           Param::F32(f) if (f - 1.5).abs() < 1e-6
+            v[0],
+            Param::F32(f) if (f - 1.5).abs() < 1e-6
         ));
 
         assert!(matches!(
-           v[1],
-           Param::F64(f) if (f - 12.34567).abs() < 1e-12
+            v[1],
+            Param::F64(f) if (f - 12.34567).abs() < 1e-12
         ));
     }
 
@@ -758,13 +801,13 @@ mod tests {
         assert_eq!(r.get_i64_opt("i64").unwrap(), Some(-2));
 
         assert!(matches!(
-           r.get_f32_opt("f32").unwrap(),
-           Some(v) if (v - 1.5).abs() < 1e-6
+            r.get_f32_opt("f32").unwrap(),
+            Some(v) if (v - 1.5).abs() < 1e-6
         ));
 
         assert!(matches!(
-           r.get_f64_opt("f64").unwrap(),
-           Some(v) if (v - 3.5).abs() < 1e-12
+            r.get_f64_opt("f64").unwrap(),
+            Some(v) if (v - 3.5).abs() < 1e-12
         ));
 
         assert_eq!(r.get_bool_opt("bool").unwrap(), Some(true));

@@ -30,9 +30,9 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
-use mysql::{Error as MyError, Params, Pool, Value as My, prelude::*};
+use mysql::{Error as MyError, Params, Pool, TxOpts, Value as My, prelude::*};
 
-use crate::db::port::{Db, Param, Row as GRow, Value};
+use crate::db::port::{Db, DbTransaction, Param, Row as GRow, Value};
 
 static SQL_DEBUG: OnceLock<bool> = OnceLock::new();
 
@@ -43,7 +43,7 @@ fn sql_debug() -> bool {
 
 macro_rules! dbglog {
     ($($arg:tt)*) => {
-       if sql_debug() { eprintln!($($arg)*); }
+        if sql_debug() { eprintln!($($arg)*); }
     }
 }
 
@@ -82,6 +82,15 @@ fn log_who_where(conn: &mut mysql::PooledConn) {
 #[derive(Clone)]
 pub struct MySqlDb {
     pool: Arc<Pool>,
+}
+
+/// MySQL transaction-scoped database adapter.
+///
+/// The adapter borrows an active MySQL transaction. Therefore every method
+/// call is executed on the same pooled connection until the owning
+/// [`Db::transaction`] call commits or rolls back.
+struct MySqlTransaction<'transaction, 'connection> {
+    transaction: &'transaction mut mysql::Transaction<'connection>,
 }
 
 impl MySqlDb {
@@ -279,6 +288,106 @@ impl Db for MySqlDb {
             .query_first("SELECT LAST_INSERT_ID()")
             .context("query_first(LAST_INSERT_ID()) failed")?;
         let id = id.ok_or_else(|| anyhow::anyhow!("LAST_INSERT_ID() returned NULL"))?;
+        Ok(id)
+    }
+
+    fn transaction(
+        &self,
+        operation: &mut dyn FnMut(&mut dyn DbTransaction) -> Result<()>,
+    ) -> Result<()> {
+        let mut conn = self.pool.get_conn().context("get_conn failed")?;
+        let mut transaction = conn
+            .start_transaction(TxOpts::default())
+            .context("start transaction failed")?;
+
+        let operation_result = {
+            let mut adapter = MySqlTransaction {
+                transaction: &mut transaction,
+            };
+
+            operation(&mut adapter)
+        };
+
+        match operation_result {
+            Ok(()) => transaction.commit().context("commit transaction failed"),
+            Err(operation_error) => match transaction.rollback() {
+                Ok(()) => Err(operation_error),
+                Err(rollback_error) => Err(operation_error
+                    .context(format!("rollback transaction failed: {rollback_error}"))),
+            },
+        }
+    }
+}
+
+impl DbTransaction for MySqlTransaction<'_, '_> {
+    fn fetch_one(&mut self, sql: &str, params_in: &[Param]) -> Result<Option<GRow>> {
+        let params = MySqlDb::to_mysql_params(params_in);
+
+        dbglog!("-- transaction exec_first about to run\nSQL: {sql}");
+        for (i, param) in params_in.iter().enumerate() {
+            dbglog!("param[{i}] = {:?}", param);
+        }
+
+        let row = self
+            .transaction
+            .exec_first::<mysql::Row, _, _>(sql, params)
+            .context("transaction exec_first failed")?;
+
+        Ok(row.map(MySqlDb::row_from_mysql))
+    }
+
+    fn fetch_all(&mut self, sql: &str, params_in: &[Param]) -> Result<Vec<GRow>> {
+        let params = MySqlDb::to_mysql_params(params_in);
+
+        dbglog!("-- transaction exec(fetch_all) about to run\nSQL: {sql}");
+        for (i, param) in params_in.iter().enumerate() {
+            dbglog!("param[{i}] = {:?}", param);
+        }
+
+        let rows = self
+            .transaction
+            .exec::<mysql::Row, _, _>(sql, params)
+            .context("transaction exec (fetch_all) failed")?;
+
+        Ok(rows.into_iter().map(MySqlDb::row_from_mysql).collect())
+    }
+
+    fn exec(&mut self, sql: &str, params_in: &[Param]) -> Result<u64> {
+        let params = MySqlDb::to_mysql_params(params_in);
+
+        dbglog!("-- transaction exec_drop about to run\nSQL: {sql}");
+        for (i, param) in params_in.iter().enumerate() {
+            dbglog!("param[{i}] = {:?}", param);
+        }
+
+        self.transaction
+            .exec_drop(sql, params)
+            .context("transaction exec_drop failed")?;
+
+        let affected_rows = self.transaction.affected_rows();
+        dbglog!("transaction affected_rows = {affected_rows}");
+
+        Ok(affected_rows)
+    }
+
+    fn exec_returning_last_insert_id(&mut self, sql: &str, params_in: &[Param]) -> Result<u64> {
+        let params = MySqlDb::to_mysql_params(params_in);
+
+        dbglog!("-- transaction exec_drop about to run\nSQL: {sql}");
+        for (i, param) in params_in.iter().enumerate() {
+            dbglog!("param[{i}] = {:?}", param);
+        }
+
+        self.transaction
+            .exec_drop(sql, params)
+            .context("transaction exec_drop failed")?;
+
+        let id: Option<u64> = self
+            .transaction
+            .query_first("SELECT LAST_INSERT_ID()")
+            .context("transaction query_first(LAST_INSERT_ID()) failed")?;
+        let id = id.ok_or_else(|| anyhow::anyhow!("LAST_INSERT_ID() returned NULL"))?;
+
         Ok(id)
     }
 }

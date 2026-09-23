@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use axum::{
-    response::{Html, IntoResponse},
     Extension,
+    response::{Html, IntoResponse},
 };
 use axum_extra::extract::cookie::CookieJar;
 
